@@ -8,9 +8,7 @@ import (
 // New creates a new Promise
 func New[T any](executor func(resolve func(T), reject func(error))) *Promise[T] {
 	p := &Promise[T]{
-		state:    Pending,
-		handlers: make([]*handler[T], 0),
-		done:     make(chan struct{}),
+		state: Pending,
 	}
 
 	// Execute executor asynchronously
@@ -43,8 +41,22 @@ func (p *Promise[T]) resolve(value T) {
 	p.state = Fulfilled
 	p.value = value
 
-	// Signal completion
-	close(p.done)
+	if p.done == nil {
+		p.done = make(chan struct{})
+	}
+
+	select {
+	case <-p.done:
+		// Channel already closed, do nothing
+		return
+	default:
+		// Channel not closed, close it
+		close(p.done)
+	}
+
+	if p.handlers == nil {
+		return
+	}
 
 	// Execute all fulfilled handlers using microtask queue
 	for _, h := range p.handlers {
@@ -73,8 +85,22 @@ func (p *Promise[T]) reject(err error) {
 	p.state = Rejected
 	p.err = err
 
-	// Signal completion
-	close(p.done)
+	if p.done == nil {
+		p.done = make(chan struct{})
+	}
+
+	select {
+	case <-p.done:
+		// Channel already closed, do nothing
+		return
+	default:
+		// Channel not closed, close it
+		close(p.done)
+	}
+
+	if p.handlers == nil {
+		return
+	}
 
 	// Execute all rejected handlers using microtask queue
 	for _, h := range p.handlers {
@@ -102,9 +128,8 @@ func (p *Promise[T]) reject(err error) {
 // Then adds fulfilled and rejected handlers
 func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *Promise[any] {
 	next := &Promise[any]{
-		state:    Pending,
-		handlers: make([]*handler[any], 0),
-		done:     make(chan struct{}),
+		state: Pending,
+		done:  make(chan struct{}),
 	}
 
 	h := &handler[T]{
@@ -143,6 +168,10 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 		}
 	} else {
 		// Promise is still pending, add handler
+		// Lazy initialize handlers slice
+		if p.handlers == nil {
+			p.handlers = make([]*handler[T], 0, 4)
+		}
 		p.handlers = append(p.handlers, h)
 	}
 
@@ -157,9 +186,8 @@ func (p *Promise[T]) Catch(onRejected func(error) any) *Promise[any] {
 // Finally adds a finally handler
 func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	next := &Promise[T]{
-		state:    Pending,
-		handlers: make([]*handler[T], 0),
-		done:     make(chan struct{}),
+		state: Pending,
+		done:  make(chan struct{}),
 	}
 
 	// Create a handler that will execute the finally callback
@@ -197,6 +225,10 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 		})
 	} else {
 		// Promise is still pending, add handler
+		// Lazy initialize handlers slice
+		if p.handlers == nil {
+			p.handlers = make([]*handler[T], 0, 4)
+		}
 		p.handlers = append(p.handlers, h)
 	}
 
@@ -205,6 +237,10 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 
 // Await waits for Promise completion and returns result
 func (p *Promise[T]) Await() (T, error) {
+	if p.done == nil {
+		p.done = make(chan struct{})
+	}
+
 	// Wait for completion signal instead of polling
 	<-p.done
 
@@ -217,6 +253,10 @@ func (p *Promise[T]) Await() (T, error) {
 
 // AwaitWithContext waits for Promise completion using context
 func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
+	if p.done == nil {
+		p.done = make(chan struct{})
+	}
+
 	select {
 	case <-ctx.Done():
 		var zero T

@@ -158,24 +158,28 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 ### 基准测试结果
 
 ```
-BenchmarkPromiseCreation-12      2302035               467.8 ns/op           288 B/op          5 allocs/op
-BenchmarkPromiseThen-12          1536283               782.5 ns/op           440 B/op          8 allocs/op
-BenchmarkPromiseAwait-12        100000000               11.49 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12       3273829               371.8 ns/op           144 B/op          3 allocs/op
-BenchmarkPromiseChain-12          267078              4451 ns/op            4447 B/op         74 allocs/op
-BenchmarkPanicHandling-12        1000000              1045 ns/op             735 B/op         13 allocs/op
+BenchmarkPromiseCreation-12      3109549               350.9 ns/op           288 B/op          5 allocs/op
+BenchmarkPromiseThen-12          1856625               646.2 ns/op           440 B/op          8 allocs/op
+BenchmarkPromiseAwait-12        100000000               11.34 ns/op            0 B/op          0 allocs/op
+BenchmarkMicrotaskQueue-12       3588987               346.4 ns/op           144 B/op          3 allocs/op
+BenchmarkPromiseChain-12          250549              4303 ns/op            4687 B/op         74 allocs/op
+BenchmarkNormalExecution-12      1325180               907.2 ns/op           759 B/op         13 allocs/op
+BenchmarkPanicHandling-12        1000000              1025 ns/op             743 B/op         12 allocs/op
 ```
 
 ### 性能分析
 
 | 操作 | 性能 | 内存分配 | 说明 |
 |------|------|----------|------|
-| **Promise创建** | 467.8 ns/op | 288 B/op | 基础Promise实例创建 |
-| **微任务调度** | 371.8 ns/op | 144 B/op | 微任务队列调度 |
-| **Promise链** | 4451 ns/op | 4447 B/op | 10级Promise链式调用 |
-| **Then操作** | 782.5 ns/op | 440 B/op | 添加Then回调 |
-| **Await等待** | 11.49 ns/op | 0 B/op | 等待已完成的Promise |
-| **异常处理** | 1045 ns/op | 735 B/op | 包含panic恢复的Promise |
+| **Promise创建** | 350.9 ns/op | 288 B/op | 基础Promise实例创建 |
+| **微任务调度** | 346.4 ns/op | 144 B/op | 微任务队列调度 |
+| **Promise链** | 4303 ns/op | 4687 B/op | 10级Promise链式调用 |
+| **Then操作** | 646.2 ns/op | 440 B/op | 添加Then回调 |
+| **Await等待** | 11.34 ns/op | 0 B/op | 等待已完成的Promise |
+| **正常执行** | 907.2 ns/op | 759 B/op | 完整Promise执行流程 |
+| **异常处理** | 1025 ns/op | 743 B/op | 包含panic恢复的Promise |
+
+
 
 ## 🧪 测试
 

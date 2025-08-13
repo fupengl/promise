@@ -62,14 +62,12 @@ func ExamplePromise_Finally() {
 	})
 
 	// Always execute cleanup
-	p.Finally(func() {
+	rep := p.Finally(func() {
 		fmt.Println("cleanup completed")
 	})
 
-	result, _ := p.Await()
-	fmt.Println(result)
+	_, _ = rep.Await()
 	// Output: cleanup completed
-	// success
 }
 
 func ExampleAll() {

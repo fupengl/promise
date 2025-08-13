@@ -158,24 +158,26 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 ### Benchmark Results
 
 ```
-BenchmarkPromiseCreation-12      2302035               467.8 ns/op           288 B/op          5 allocs/op
-BenchmarkPromiseThen-12          1536283               782.5 ns/op           440 B/op          8 allocs/op
-BenchmarkPromiseAwait-12        100000000               11.49 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12       3273829               371.8 ns/op           144 B/op          3 allocs/op
-BenchmarkPromiseChain-12          267078              4451 ns/op            4447 B/op         74 allocs/op
-BenchmarkPanicHandling-12        1000000              1045 ns/op             735 B/op         13 allocs/op
+BenchmarkPromiseCreation-12      3109549               350.9 ns/op           288 B/op          5 allocs/op
+BenchmarkPromiseThen-12          1856625               646.2 ns/op           440 B/op          8 allocs/op
+BenchmarkPromiseAwait-12        100000000               11.34 ns/op            0 B/op          0 allocs/op
+BenchmarkMicrotaskQueue-12       3588987               346.4 ns/op           144 B/op          3 allocs/op
+BenchmarkPromiseChain-12          250549              4303 ns/op            4687 B/op         74 allocs/op
+BenchmarkNormalExecution-12      1325180               907.2 ns/op           759 B/op         13 allocs/op
+BenchmarkPanicHandling-12        1000000              1025 ns/op             743 B/op         12 allocs/op
 ```
 
 ### Performance Analysis
 
 | Operation | Performance | Memory Allocation | Description |
 |-----------|-------------|-------------------|-------------|
-| **Promise Creation** | 467.8 ns/op | 288 B/op | Basic Promise instance creation |
-| **Microtask Scheduling** | 371.8 ns/op | 144 B/op | Microtask queue scheduling |
-| **Promise Chain** | 4451 ns/op | 4447 B/op | 10-level Promise chaining |
-| **Then Operation** | 782.5 ns/op | 440 B/op | Adding Then callback |
-| **Await Wait** | 11.49 ns/op | 0 B/op | Waiting for completed Promise |
-| **Exception Handling** | 1045 ns/op | 735 B/op | Promise with panic recovery |
+| **Promise Creation** | 350.9 ns/op | 288 B/op | Basic Promise instance creation |
+| **Microtask Scheduling** | 346.4 ns/op | 144 B/op | Microtask queue scheduling |
+| **Promise Chain** | 4303 ns/op | 4687 B/op | 10-level Promise chaining |
+| **Then Operation** | 646.2 ns/op | 440 B/op | Adding Then callback |
+| **Await Wait** | 11.34 ns/op | 0 B/op | Waiting for completed Promise |
+| **Normal Execution** | 907.2 ns/op | 759 B/op | Complete Promise execution flow |
+| **Exception Handling** | 1025 ns/op | 743 B/op | Promise with panic recovery |
 
 ## 🧪 Testing
 

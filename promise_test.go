@@ -1,8 +1,10 @@
 package promise
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -289,11 +291,11 @@ func TestPromiseFinally(t *testing.T) {
 		resolve("successfully completed")
 	})
 
-	p.Finally(func() {
+	rep := p.Finally(func() {
 		finallyCalled = true
 	})
 
-	result, err := p.Await()
+	result, err := rep.Await()
 	if err != nil {
 		t.Errorf("Expected success, but got error: %v", err)
 	}
@@ -304,5 +306,187 @@ func TestPromiseFinally(t *testing.T) {
 
 	if result != "successfully completed" {
 		t.Errorf("Expected result 'successfully completed', but got: '%s'", result)
+	}
+}
+
+// TestPromiseFinallyRejected tests Finally with rejected Promise
+func TestPromiseFinallyRejected(t *testing.T) {
+	finallyCalled := false
+
+	p := New(func(resolve func(string), reject func(error)) {
+		time.Sleep(50 * time.Millisecond)
+		reject(errors.New("test error"))
+	})
+
+	rep := p.Finally(func() {
+		finallyCalled = true
+	})
+
+	_, err := rep.Await()
+	if err == nil {
+		t.Error("Expected error, but got nil")
+	}
+
+	if !finallyCalled {
+		t.Error("Finally should have been called even for rejected Promise")
+	}
+}
+
+// TestPromiseThenRejected tests Then with rejected Promise
+func TestPromiseThenRejected(t *testing.T) {
+	onRejectedCalled := false
+	onFulfilledCalled := false
+
+	p := New(func(resolve func(string), reject func(error)) {
+		time.Sleep(50 * time.Millisecond)
+		reject(errors.New("test error"))
+	})
+
+	resultPromise := p.Then(
+		func(value string) any {
+			onFulfilledCalled = true
+			return value + " processed"
+		},
+		func(err error) any {
+			onRejectedCalled = true
+			return "error handled: " + err.Error()
+		},
+	)
+
+	result, err := resultPromise.Await()
+	if err != nil {
+		t.Errorf("Expected success from error handler, but got error: %v", err)
+	}
+
+	if onFulfilledCalled {
+		t.Error("onFulfilled should not be called for rejected Promise")
+	}
+	if !onRejectedCalled {
+		t.Error("onRejected should be called for rejected Promise")
+	}
+
+	if result != "error handled: test error" {
+		t.Errorf("Expected 'error handled: test error', but got: '%v'", result)
+	}
+}
+
+// TestPromiseStateChecks tests the state checking methods
+func TestPromiseStateChecks(t *testing.T) {
+	// Test pending state
+	pendingPromise := New(func(resolve func(string), reject func(error)) {
+		// Do nothing, keep it pending
+	})
+
+	if !pendingPromise.IsPending() {
+		t.Error("New Promise should be pending")
+	}
+	if pendingPromise.IsFulfilled() {
+		t.Error("New Promise should not be fulfilled")
+	}
+	if pendingPromise.IsRejected() {
+		t.Error("New Promise should not be rejected")
+	}
+
+	// Test fulfilled state
+	fulfilledPromise := New(func(resolve func(string), reject func(error)) {
+		resolve("success")
+	})
+
+	// Wait for completion
+	_, _ = fulfilledPromise.Await()
+
+	if fulfilledPromise.IsPending() {
+		t.Error("Resolved Promise should not be pending")
+	}
+	if !fulfilledPromise.IsFulfilled() {
+		t.Error("Resolved Promise should be fulfilled")
+	}
+	if fulfilledPromise.IsRejected() {
+		t.Error("Resolved Promise should not be rejected")
+	}
+
+	// Test rejected state
+	rejectedPromise := New(func(resolve func(string), reject func(error)) {
+		reject(errors.New("error"))
+	})
+
+	// Wait for completion
+	_, _ = rejectedPromise.Await()
+
+	if rejectedPromise.IsPending() {
+		t.Error("Rejected Promise should not be pending")
+	}
+	if rejectedPromise.IsFulfilled() {
+		t.Error("Rejected Promise should not be fulfilled")
+	}
+	if !rejectedPromise.IsRejected() {
+		t.Error("Rejected Promise should be rejected")
+	}
+}
+
+// TestRejectFunction tests the Reject utility function
+func TestRejectFunction(t *testing.T) {
+	err := errors.New("test error")
+	rejectedPromise := Reject[string](err)
+
+	if rejectedPromise.IsPending() {
+		t.Error("Reject should create a non-pending Promise")
+	}
+	if !rejectedPromise.IsRejected() {
+		t.Error("Reject should create a rejected Promise")
+	}
+
+	// Test Await returns the error
+	_, resultErr := rejectedPromise.Await()
+	if resultErr == nil {
+		t.Error("Rejected Promise should return error")
+	}
+	if resultErr.Error() != err.Error() {
+		t.Errorf("Expected error %v, got %v", err, resultErr)
+	}
+}
+
+// TestMicrotaskConfig tests the microtask configuration
+func TestMicrotaskConfig(t *testing.T) {
+	// Test default config
+	defaultConfig := DefaultMicrotaskConfig()
+	if defaultConfig.BufferSize != 1000 {
+		t.Errorf("Expected default BufferSize 1000, got %d", defaultConfig.BufferSize)
+	}
+	if defaultConfig.WorkerCount != runtime.NumCPU() {
+		t.Errorf("Expected default WorkerCount %d, got %d", runtime.NumCPU(), defaultConfig.WorkerCount)
+	}
+
+	// Test custom config
+	customConfig := &MicrotaskConfig{
+		BufferSize:  2000,
+		WorkerCount: 4,
+	}
+	SetMicrotaskConfig(customConfig)
+
+	// Test nil config (should use default)
+	SetMicrotaskConfig(nil)
+	nilConfig := DefaultMicrotaskConfig()
+	if nilConfig.BufferSize != 1000 {
+		t.Error("Nil config should use default values")
+	}
+}
+
+// TestPromiseAwaitWithContextTimeout tests AwaitWithContext with timeout
+func TestPromiseAwaitWithContextTimeout(t *testing.T) {
+	p := New(func(resolve func(string), reject func(error)) {
+		time.Sleep(200 * time.Millisecond) // Longer than context timeout
+		resolve("success")
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := p.AwaitWithContext(ctx)
+	if err == nil {
+		t.Error("Expected timeout error, but got nil")
+	}
+	if err != context.DeadlineExceeded {
+		t.Errorf("Expected DeadlineExceeded error, but got: %v", err)
 	}
 }

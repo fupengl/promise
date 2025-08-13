@@ -77,6 +77,24 @@ func BenchmarkPromiseChain(b *testing.B) {
 	}
 }
 
+// BenchmarkNormalExecution measures the performance of normal promise execution
+func BenchmarkNormalExecution(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		promise := New(func(resolve func(string), reject func(error)) {
+			resolve("test")
+		})
+
+		resultPromise := promise.Then(func(value string) any {
+			return value + " processed"
+		}, nil)
+
+		result, err := resultPromise.Await()
+		_ = result
+		_ = err
+	}
+}
+
 // BenchmarkPanicHandling measures the performance impact of panic handling
 func BenchmarkPanicHandling(b *testing.B) {
 	b.ResetTimer()
@@ -85,11 +103,14 @@ func BenchmarkPanicHandling(b *testing.B) {
 			resolve("test")
 		})
 
-		// Add a callback that might panic (but doesn't in this case)
-		promise.Then(func(value string) any {
+		resultPromise := promise.Then(func(value string) any {
+			if value == "test" {
+				panic("intentional panic for testing")
+			}
 			return value + " safe"
 		}, nil)
 
-		_, _ = promise.Await()
+		_, err := resultPromise.Await()
+		_ = err
 	}
 }

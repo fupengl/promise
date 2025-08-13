@@ -80,7 +80,6 @@ func scheduleMicrotask(fn func()) {
 	default:
 		// Queue is full, execute immediately
 		fn()
-		// Close the channel since we executed immediately
 		close(done)
 	}
 }
