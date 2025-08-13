@@ -2,7 +2,6 @@ package promise
 
 import (
 	"testing"
-	"time"
 )
 
 // BenchmarkPromiseCreation measures the performance of creating promises
@@ -75,24 +74,6 @@ func BenchmarkPromiseChain(b *testing.B) {
 		}
 
 		_, _ = currentPromise.Await()
-	}
-}
-
-// BenchmarkConcurrentPromises measures the performance of concurrent promise operations
-func BenchmarkConcurrentPromises(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		// Create 100 concurrent promises
-		promises := make([]*Promise[string], 100)
-		for j := 0; j < 100; j++ {
-			promises[j] = New(func(resolve func(string), reject func(error)) {
-				time.Sleep(1 * time.Millisecond)
-				resolve("concurrent")
-			})
-		}
-
-		// Wait for all to complete
-		_, _ = All(promises...).Await()
 	}
 }
 

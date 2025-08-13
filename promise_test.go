@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Simulate async operation
+// Simulate async operation for testing
 func asyncTask(id int, delay time.Duration, shouldFail bool) *Promise[string] {
 	return New(func(resolve func(string), reject func(error)) {
 		time.Sleep(delay)
@@ -20,8 +20,6 @@ func asyncTask(id int, delay time.Duration, shouldFail bool) *Promise[string] {
 }
 
 func TestBasicPromise(t *testing.T) {
-	fmt.Println("=== Testing Basic Promise Functionality ===")
-
 	// Create a successful Promise
 	p1 := New(func(resolve func(string), reject func(error)) {
 		time.Sleep(100 * time.Millisecond)
@@ -30,10 +28,8 @@ func TestBasicPromise(t *testing.T) {
 
 	// Use Then to handle results
 	p1.Then(func(value string) any {
-		fmt.Printf("Success: %s\n", value)
 		return value + " (processed)"
 	}, func(err error) any {
-		fmt.Printf("Failure: %v\n", err)
 		return nil
 	})
 
@@ -48,36 +44,32 @@ func TestBasicPromise(t *testing.T) {
 }
 
 func TestPromiseChain(t *testing.T) {
-	fmt.Println("\n=== Testing Promise Chain Calls ===")
-
 	p := New(func(resolve func(int), reject func(error)) {
 		time.Sleep(50 * time.Millisecond)
 		resolve(10)
 	})
 
-	p.Then(func(value int) any {
-		fmt.Printf("Step 1: %d\n", value)
+	// Test chain execution
+	chainResult := p.Then(func(value int) any {
 		return value * 2
 	}, nil).Then(func(value any) any {
-		fmt.Printf("Step 2: %v\n", value)
-		return value.(int) + 5
-	}, nil).Then(func(value any) any {
-		fmt.Printf("Step 3: %v\n", value)
-		return value
+		if v, ok := value.(int); ok {
+			return v + 5
+		}
+		return 0
 	}, nil)
 
-	result, err := p.Await()
+	result, err := chainResult.Await()
 	if err != nil {
 		t.Errorf("Expected success, but got error: %v", err)
 	}
-	if result != 10 {
-		t.Errorf("Expected result 10, but got: %d", result)
+	expected := 25 // (10 * 2) + 5
+	if result != expected {
+		t.Errorf("Expected result %d, but got: %d", expected, result)
 	}
 }
 
 func TestPromiseAll(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.All ===")
-
 	promises := []*Promise[string]{
 		asyncTask(1, 100*time.Millisecond, false),
 		asyncTask(2, 200*time.Millisecond, false),
@@ -95,12 +87,16 @@ func TestPromiseAll(t *testing.T) {
 		t.Errorf("Expected 3 results, but got: %d", len(results))
 	}
 
-	fmt.Printf("All results: %v\n", results)
+	// Verify all tasks completed successfully
+	for i, result := range results {
+		expected := fmt.Sprintf("task %d completed", i+1)
+		if result != expected {
+			t.Errorf("Expected result '%s', but got: '%s'", expected, result)
+		}
+	}
 }
 
 func TestPromiseAllSettled(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.AllSettled ===")
-
 	promises := []*Promise[string]{
 		asyncTask(1, 100*time.Millisecond, false),
 		asyncTask(2, 200*time.Millisecond, true), // This will fail
@@ -118,18 +114,16 @@ func TestPromiseAllSettled(t *testing.T) {
 		t.Errorf("Expected 3 results, but got: %d", len(results))
 	}
 
-	for _, result := range results {
-		if result.Error != nil {
-			fmt.Printf("Task %d failed: %v\n", result.Index, result.Error)
-		} else {
-			fmt.Printf("Task %d succeeded: %s\n", result.Index, result.Value)
-		}
+	// Verify task 2 failed and others succeeded
+	if results[1].Error == nil {
+		t.Errorf("Expected task 2 to fail")
+	}
+	if results[0].Error != nil || results[2].Error != nil {
+		t.Errorf("Expected tasks 1 and 3 to succeed")
 	}
 }
 
 func TestPromiseRace(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Race ===")
-
 	promises := []*Promise[string]{
 		asyncTask(1, 300*time.Millisecond, false),
 		asyncTask(2, 100*time.Millisecond, false), // This is the fastest
@@ -143,12 +137,14 @@ func TestPromiseRace(t *testing.T) {
 		t.Errorf("Expected success, but got error: %v", err)
 	}
 
-	fmt.Printf("Race winner: %s\n", result)
+	// The fastest task should win
+	expected := "task 2 completed"
+	if result != expected {
+		t.Errorf("Expected result '%s', but got: '%s'", expected, result)
+	}
 }
 
 func TestPromiseAny(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Any ===")
-
 	promises := []*Promise[string]{
 		asyncTask(1, 100*time.Millisecond, true),  // Will fail
 		asyncTask(2, 200*time.Millisecond, false), // Will succeed
@@ -162,12 +158,14 @@ func TestPromiseAny(t *testing.T) {
 		t.Errorf("Expected success, but got error: %v", err)
 	}
 
-	fmt.Printf("Any success result: %s\n", result)
+	// Should get the first successful result
+	expected := "task 2 completed"
+	if result != expected {
+		t.Errorf("Expected result '%s', but got: '%s'", expected, result)
+	}
 }
 
 func TestPromiseTimeout(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Timeout ===")
-
 	// Create a Promise that takes a long time
 	slowPromise := New(func(resolve func(string), reject func(error)) {
 		time.Sleep(2 * time.Second)
@@ -182,12 +180,13 @@ func TestPromiseTimeout(t *testing.T) {
 		t.Errorf("Expected timeout error, but didn't get one")
 	}
 
-	fmt.Printf("Timeout error: %v\n", err)
+	// Verify it's a timeout error
+	if err.Error() != "promise timeout" {
+		t.Errorf("Expected timeout error, but got: %v", err)
+	}
 }
 
 func TestPromiseRetry(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Retry ===")
-
 	attempts := 0
 	fn := func() (string, error) {
 		attempts++
@@ -204,12 +203,16 @@ func TestPromiseRetry(t *testing.T) {
 		t.Errorf("Expected success, but got error: %v", err)
 	}
 
-	fmt.Printf("Retry result: %s (attempts: %d)\n", result, attempts)
+	if result != "retry success" {
+		t.Errorf("Expected result 'retry success', but got: '%s'", result)
+	}
+
+	if attempts != 3 {
+		t.Errorf("Expected 3 attempts, but got: %d", attempts)
+	}
 }
 
 func TestPromiseMap(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Map ===")
-
 	items := []int{1, 2, 3, 4, 5}
 
 	mapPromise := Map(items, func(item int) *Promise[string] {
@@ -222,12 +225,20 @@ func TestPromiseMap(t *testing.T) {
 		t.Errorf("Expected success, but got error: %v", err)
 	}
 
-	fmt.Printf("Map results: %v\n", results)
+	if len(results) != 5 {
+		t.Errorf("Expected 5 results, but got: %d", len(results))
+	}
+
+	// Verify all items were processed
+	for i, result := range results {
+		expected := fmt.Sprintf("task %d completed", i+1)
+		if result != expected {
+			t.Errorf("Expected result '%s', but got: '%s'", expected, result)
+		}
+	}
 }
 
 func TestPromiseReduce(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Reduce ===")
-
 	items := []int{1, 2, 3, 4, 5}
 
 	reducePromise := Reduce(items, func(acc int, item int) *Promise[int] {
@@ -247,32 +258,30 @@ func TestPromiseReduce(t *testing.T) {
 	if result != expected {
 		t.Errorf("Expected result %d, but got: %d", expected, result)
 	}
-
-	fmt.Printf("Reduce result: %d\n", result)
 }
 
 func TestPromiseCatch(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Catch ===")
-
 	p := New(func(resolve func(string), reject func(error)) {
 		time.Sleep(50 * time.Millisecond)
 		reject(errors.New("intentional failure"))
 	})
 
-	p.Catch(func(err error) any {
-		fmt.Printf("Caught error: %v\n", err)
+	// Test error handling
+	caughtPromise := p.Catch(func(err error) any {
 		return "error handled"
 	})
 
-	_, err := p.Await()
-	if err == nil {
-		t.Errorf("Expected error, but didn't get one")
+	result, err := caughtPromise.Await()
+	if err != nil {
+		t.Errorf("Expected success after error handling, but got error: %v", err)
+	}
+
+	if result != "error handled" {
+		t.Errorf("Expected result 'error handled', but got: '%v'", result)
 	}
 }
 
 func TestPromiseFinally(t *testing.T) {
-	fmt.Println("\n=== Testing Promise.Finally ===")
-
 	finallyCalled := false
 
 	p := New(func(resolve func(string), reject func(error)) {
@@ -282,7 +291,6 @@ func TestPromiseFinally(t *testing.T) {
 
 	p.Finally(func() {
 		finallyCalled = true
-		fmt.Println("Finally was called")
 	})
 
 	result, err := p.Await()
@@ -294,5 +302,7 @@ func TestPromiseFinally(t *testing.T) {
 		t.Errorf("Finally should have been called")
 	}
 
-	fmt.Printf("Result: %s\n", result)
+	if result != "successfully completed" {
+		t.Errorf("Expected result 'successfully completed', but got: '%s'", result)
+	}
 }
