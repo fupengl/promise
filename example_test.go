@@ -9,7 +9,7 @@ import (
 
 // Simulate async operation
 func asyncTask(id int, delay time.Duration, shouldFail bool) *Promise[string] {
-	return New[string](func(resolve func(string), reject func(error)) {
+	return New(func(resolve func(string), reject func(error)) {
 		time.Sleep(delay)
 		if shouldFail {
 			reject(errors.New(fmt.Sprintf("task %d failed", id)))
@@ -23,16 +23,16 @@ func TestBasicPromise(t *testing.T) {
 	fmt.Println("=== Testing Basic Promise Functionality ===")
 
 	// Create a successful Promise
-	p1 := New[string](func(resolve func(string), reject func(error)) {
+	p1 := New(func(resolve func(string), reject func(error)) {
 		time.Sleep(100 * time.Millisecond)
 		resolve("Hello, Promise!")
 	})
 
 	// Use Then to handle results
-	p1.Then(func(value string) interface{} {
+	p1.Then(func(value string) any {
 		fmt.Printf("Success: %s\n", value)
 		return value + " (processed)"
-	}, func(err error) interface{} {
+	}, func(err error) any {
 		fmt.Printf("Failure: %v\n", err)
 		return nil
 	})
@@ -50,18 +50,18 @@ func TestBasicPromise(t *testing.T) {
 func TestPromiseChain(t *testing.T) {
 	fmt.Println("\n=== Testing Promise Chain Calls ===")
 
-	p := New[int](func(resolve func(int), reject func(error)) {
+	p := New(func(resolve func(int), reject func(error)) {
 		time.Sleep(50 * time.Millisecond)
 		resolve(10)
 	})
 
-	p.Then(func(value int) interface{} {
+	p.Then(func(value int) any {
 		fmt.Printf("Step 1: %d\n", value)
 		return value * 2
-	}, nil).Then(func(value interface{}) interface{} {
+	}, nil).Then(func(value any) any {
 		fmt.Printf("Step 2: %v\n", value)
 		return value.(int) + 5
-	}, nil).Then(func(value interface{}) interface{} {
+	}, nil).Then(func(value any) any {
 		fmt.Printf("Step 3: %v\n", value)
 		return value
 	}, nil)
@@ -169,7 +169,7 @@ func TestPromiseTimeout(t *testing.T) {
 	fmt.Println("\n=== Testing Promise.Timeout ===")
 
 	// Create a Promise that takes a long time
-	slowPromise := New[string](func(resolve func(string), reject func(error)) {
+	slowPromise := New(func(resolve func(string), reject func(error)) {
 		time.Sleep(2 * time.Second)
 		resolve("Too slow")
 	})
@@ -231,7 +231,7 @@ func TestPromiseReduce(t *testing.T) {
 	items := []int{1, 2, 3, 4, 5}
 
 	reducePromise := Reduce(items, func(acc int, item int) *Promise[int] {
-		return New[int](func(resolve func(int), reject func(error)) {
+		return New(func(resolve func(int), reject func(error)) {
 			time.Sleep(10 * time.Millisecond)
 			resolve(acc + item)
 		})
@@ -254,12 +254,12 @@ func TestPromiseReduce(t *testing.T) {
 func TestPromiseCatch(t *testing.T) {
 	fmt.Println("\n=== Testing Promise.Catch ===")
 
-	p := New[string](func(resolve func(string), reject func(error)) {
+	p := New(func(resolve func(string), reject func(error)) {
 		time.Sleep(50 * time.Millisecond)
 		reject(errors.New("intentional failure"))
 	})
 
-	p.Catch(func(err error) interface{} {
+	p.Catch(func(err error) any {
 		fmt.Printf("Caught error: %v\n", err)
 		return "error handled"
 	})
@@ -275,7 +275,7 @@ func TestPromiseFinally(t *testing.T) {
 
 	finallyCalled := false
 
-	p := New[string](func(resolve func(string), reject func(error)) {
+	p := New(func(resolve func(string), reject func(error)) {
 		time.Sleep(50 * time.Millisecond)
 		resolve("successfully completed")
 	})

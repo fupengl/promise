@@ -3,40 +3,14 @@ package promise
 import (
 	"context"
 	"errors"
-	"sync"
-	"time"
 )
-
-// Promise state enumeration
-type State int
-
-const (
-	Pending State = iota
-	Fulfilled
-	Rejected
-)
-
-// Promise structure
-type Promise[T any] struct {
-	state    State
-	value    T
-	err      error
-	handlers []*handler[T]
-	mu       sync.RWMutex
-}
-
-// handler structure for processing
-type handler[T any] struct {
-	onFulfilled func(T) interface{}
-	onRejected  func(error) interface{}
-	next        *Promise[interface{}]
-}
 
 // New creates a new Promise
 func New[T any](executor func(resolve func(T), reject func(error))) *Promise[T] {
 	p := &Promise[T]{
 		state:    Pending,
 		handlers: make([]*handler[T], 0),
+		done:     make(chan struct{}),
 	}
 
 	// Execute executor asynchronously
@@ -69,15 +43,20 @@ func (p *Promise[T]) resolve(value T) {
 	p.state = Fulfilled
 	p.value = value
 
-	// Execute all fulfilled handlers
+	// Signal completion
+	close(p.done)
+
+	// Execute all fulfilled handlers using microtask queue
 	for _, h := range p.handlers {
 		if h.onFulfilled != nil {
-			go func(h *handler[T]) {
-				result := h.onFulfilled(value)
-				if h.next != nil {
-					h.next.resolve(result)
-				}
-			}(h)
+			// Capture values to avoid race conditions
+			handler := h.onFulfilled
+			next := h.next
+			val := value
+
+			scheduleMicrotask(func() {
+				safeCallback(handler, val, next)
+			})
 		}
 	}
 }
@@ -94,27 +73,38 @@ func (p *Promise[T]) reject(err error) {
 	p.state = Rejected
 	p.err = err
 
-	// Execute all rejected handlers
+	// Signal completion
+	close(p.done)
+
+	// Execute all rejected handlers using microtask queue
 	for _, h := range p.handlers {
 		if h.onRejected != nil {
-			go func(h *handler[T]) {
-				result := h.onRejected(err)
-				if h.next != nil {
-					h.next.resolve(result)
-				}
-			}(h)
+			// Capture values to avoid race conditions
+			handler := h.onRejected
+			next := h.next
+			errVal := err
+
+			scheduleMicrotask(func() {
+				safeErrorCallback(handler, errVal, next)
+			})
 		} else if h.next != nil {
 			// If no rejected handler, pass error to next Promise
-			h.next.reject(err)
+			// This follows JavaScript Promise behavior
+			next := h.next
+			errVal := err
+			scheduleMicrotask(func() {
+				next.reject(errVal)
+			})
 		}
 	}
 }
 
 // Then adds fulfilled and rejected handlers
-func (p *Promise[T]) Then(onFulfilled func(T) interface{}, onRejected func(error) interface{}) *Promise[interface{}] {
-	next := &Promise[interface{}]{
+func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *Promise[any] {
+	next := &Promise[any]{
 		state:    Pending,
-		handlers: make([]*handler[interface{}], 0),
+		handlers: make([]*handler[any], 0),
+		done:     make(chan struct{}),
 	}
 
 	h := &handler[T]{
@@ -126,22 +116,28 @@ func (p *Promise[T]) Then(onFulfilled func(T) interface{}, onRejected func(error
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// If Promise is already completed, execute handlers immediately
+	// If Promise is already completed, execute handlers using microtask queue
 	if p.state == Fulfilled {
 		if onFulfilled != nil {
-			go func() {
-				result := onFulfilled(p.value)
-				next.resolve(result)
-			}()
+			// Capture values to avoid race conditions
+			handler := onFulfilled
+			val := p.value
+
+			scheduleMicrotask(func() {
+				safeCallback(handler, val, next)
+			})
 		} else {
 			next.resolve(p.value)
 		}
 	} else if p.state == Rejected {
 		if onRejected != nil {
-			go func() {
-				result := onRejected(p.err)
-				next.resolve(result)
-			}()
+			// Capture values to avoid race conditions
+			handler := onRejected
+			errVal := p.err
+
+			scheduleMicrotask(func() {
+				safeErrorCallback(handler, errVal, next)
+			})
 		} else {
 			next.reject(p.err)
 		}
@@ -154,7 +150,7 @@ func (p *Promise[T]) Then(onFulfilled func(T) interface{}, onRejected func(error
 }
 
 // Catch adds a rejected handler
-func (p *Promise[T]) Catch(onRejected func(error) interface{}) *Promise[interface{}] {
+func (p *Promise[T]) Catch(onRejected func(error) any) *Promise[any] {
 	return p.Then(nil, onRejected)
 }
 
@@ -163,35 +159,54 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	next := &Promise[T]{
 		state:    Pending,
 		handlers: make([]*handler[T], 0),
+		done:     make(chan struct{}),
 	}
 
-	p.Then(
-		func(value T) interface{} {
-			onFinally()
-			next.resolve(value)
+	// Create a handler that will execute the finally callback
+	h := &handler[T]{
+		onFulfilled: func(value T) any {
+			safeFinallyCallback(onFinally, next, value, nil)
 			return nil
 		},
-		func(err error) interface{} {
-			onFinally()
-			next.reject(err)
+		onRejected: func(err error) any {
+			safeFinallyCallback(onFinally, next, p.value, err)
 			return nil
 		},
-	)
+		next: nil, // We don't need to chain to another promise here
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// If Promise is already completed, execute handlers using microtask queue
+	if p.state == Fulfilled {
+		// Capture values to avoid race conditions
+		handler := h.onFulfilled
+		val := p.value
+
+		scheduleMicrotask(func() {
+			handler(val)
+		})
+	} else if p.state == Rejected {
+		// Capture values to avoid race conditions
+		handler := h.onRejected
+		errVal := p.err
+
+		scheduleMicrotask(func() {
+			handler(errVal)
+		})
+	} else {
+		// Promise is still pending, add handler
+		p.handlers = append(p.handlers, h)
+	}
 
 	return next
 }
 
 // Await waits for Promise completion and returns result
 func (p *Promise[T]) Await() (T, error) {
-	for {
-		p.mu.RLock()
-		if p.state != Pending {
-			p.mu.RUnlock()
-			break
-		}
-		p.mu.RUnlock()
-		time.Sleep(time.Millisecond)
-	}
+	// Wait for completion signal instead of polling
+	<-p.done
 
 	if p.state == Fulfilled {
 		return p.value, nil
@@ -202,23 +217,14 @@ func (p *Promise[T]) Await() (T, error) {
 
 // AwaitWithContext waits for Promise completion using context
 func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			var zero T
-			return zero, ctx.Err()
-		default:
-			p.mu.RLock()
-			if p.state != Pending {
-				p.mu.RUnlock()
-				goto done
-			}
-			p.mu.RUnlock()
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	case <-p.done:
+		// Promise completed
 	}
 
-done:
 	if p.state == Fulfilled {
 		return p.value, nil
 	}
@@ -246,4 +252,85 @@ func (p *Promise[T]) IsFulfilled() bool {
 // IsRejected checks if Promise is rejected
 func (p *Promise[T]) IsRejected() bool {
 	return p.State() == Rejected
+}
+
+// safeCallback wraps a callback function with panic recovery
+func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
+	if next == nil {
+		// No next Promise, execute directly without panic handling
+		callback(value)
+		return
+	}
+
+	// Has next Promise, wrap with panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			var err error
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = errors.New("panic occurred in callback")
+			}
+			next.reject(err)
+		}
+	}()
+
+	result := callback(value)
+	next.resolve(result)
+}
+
+// safeErrorCallback wraps an error callback function with panic recovery
+func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) {
+	if next == nil {
+		// No next Promise, execute directly without panic handling
+		callback(err)
+		return
+	}
+
+	// Has next Promise, wrap with panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			var panicErr error
+			if e, ok := r.(error); ok {
+				panicErr = e
+			} else {
+				panicErr = errors.New("panic occurred in error callback")
+			}
+			next.reject(panicErr)
+		}
+	}()
+
+	result := callback(err)
+	next.resolve(result)
+}
+
+// safeFinallyCallback wraps a finally callback function with panic recovery
+func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err error) {
+	if next == nil {
+		// No next Promise, execute directly without panic handling
+		callback()
+		return
+	}
+
+	// Has next Promise, wrap with panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			var panicErr error
+			if e, ok := r.(error); ok {
+				panicErr = e
+			} else {
+				panicErr = errors.New("panic occurred in finally callback")
+			}
+			next.reject(panicErr)
+		}
+	}()
+
+	callback()
+
+	// After finally callback, resolve/reject based on original state
+	if err != nil {
+		next.reject(err)
+	} else {
+		next.resolve(value)
+	}
 }
