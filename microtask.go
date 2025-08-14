@@ -74,12 +74,7 @@ func scheduleMicrotask(fn func()) {
 		done: done,
 	}
 
-	select {
-	case globalMicroTaskQueue.tasks <- task:
-		// Task queued successfully
-	default:
-		// Queue is full, execute immediately
-		fn()
-		close(done)
-	}
+	// Always queue the task, even if it means blocking
+	// This preserves the microtask execution order
+	globalMicroTaskQueue.tasks <- task
 }

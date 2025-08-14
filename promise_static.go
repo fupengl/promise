@@ -7,7 +7,7 @@ import (
 
 // All waits for all Promises to complete, rejects if any Promise is rejected
 func All[T any](promises ...*Promise[T]) *Promise[[]T] {
-	return New[[]T](func(resolve func([]T), reject func(error)) {
+	return New(func(resolve func([]T), reject func(error)) {
 		if len(promises) == 0 {
 			resolve([]T{})
 			return
