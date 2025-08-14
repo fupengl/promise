@@ -180,3 +180,99 @@ func ExampleReduce() {
 	fmt.Printf("Sum: %d\n", result)
 	// Output: Sum: 15
 }
+
+func ExampleGlobalManagerConfiguration() {
+	// Method 1: Configure microtask through global manager
+	GetDefaultMgr().SetMicrotaskConfig(&MicrotaskConfig{
+		BufferSize:  3000,
+		WorkerCount: 6,
+	})
+
+	// Method 2: Configure executor worker count through global manager
+	GetDefaultMgr().SetExecutorWorker(8)
+
+	// Method 3: Create custom manager
+	customMgr := NewPromiseMgrWithConfig(4, &MicrotaskConfig{
+		BufferSize:  1000,
+		WorkerCount: 2,
+	})
+
+	// Create Promise using custom manager
+	p := NewWithMgr(customMgr, func(resolve func(string), reject func(error)) {
+		resolve("Hello from custom manager!")
+	})
+
+	// Create Promise using default manager
+	p2 := New(func(resolve func(string), reject func(error)) {
+		resolve("Hello from global manager!")
+	})
+
+	fmt.Printf("Custom manager workers: %d\n", customMgr.Workers())
+	fmt.Printf("Global manager workers: %d\n", GetDefaultMgr().Workers())
+
+	// Wait for Promise completion
+	result1, _ := p.Await()
+	result2, _ := p2.Await()
+
+	fmt.Printf("Result1: %s\n", result1)
+	fmt.Printf("Result2: %s\n", result2)
+
+	// Cleanup
+	customMgr.Close()
+}
+
+func ExampleCustomManagerIsolation() {
+	// Create two different managers with different configurations
+	mgr1 := NewPromiseMgrWithConfig(2, &MicrotaskConfig{
+		BufferSize:  500,
+		WorkerCount: 1,
+	})
+
+	mgr2 := NewPromiseMgrWithConfig(4, &MicrotaskConfig{
+		BufferSize:  2000,
+		WorkerCount: 3,
+	})
+
+	// Create Promises using different managers
+	p1 := NewWithMgr(mgr1, func(resolve func(string), reject func(error)) {
+		time.Sleep(10 * time.Millisecond)
+		resolve("from mgr1")
+	})
+
+	p2 := NewWithMgr(mgr2, func(resolve func(string), reject func(error)) {
+		time.Sleep(20 * time.Millisecond)
+		resolve("from mgr2")
+	})
+
+	// Both Promises can execute in parallel without affecting each other
+	result1, _ := p1.Await()
+	result2, _ := p2.Await()
+
+	fmt.Printf("Result1: %s\n", result1)
+	fmt.Printf("Result2: %s\n", result2)
+
+	// Cleanup
+	mgr1.Close()
+	mgr2.Close()
+}
+
+func ExampleResetDefaultManager() {
+	// Get current default manager
+	currentMgr := GetDefaultMgr()
+	fmt.Printf("Current workers: %d\n", currentMgr.Workers())
+
+	// Reset default manager configuration
+	ResetDefaultMgr(8, &MicrotaskConfig{
+		BufferSize:  3000,
+		WorkerCount: 4,
+	})
+
+	// Get new default manager
+	newMgr := GetDefaultMgr()
+	fmt.Printf("New workers: %d\n", newMgr.Workers())
+
+	// Verify configuration has been updated
+	config := newMgr.GetMicrotaskConfig()
+	fmt.Printf("New buffer size: %d\n", config.BufferSize)
+	fmt.Printf("New worker count: %d\n", config.WorkerCount)
+}

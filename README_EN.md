@@ -10,11 +10,13 @@ A high-performance, type-safe Go Promise library inspired by JavaScript Promises
 ## ✨ Features
 
 - 🚀 **High Performance**: Based on microtask queue, avoiding goroutine leaks
-- 🔒 **Type Safe**: Using Go generics with compile-time type checking
+- 🔒 **Type Safe**: Using Go generics, compile-time type checking
 - 🛡️ **Safe & Reliable**: Built-in panic recovery, automatic error propagation
-- 🔄 **Chainable**: Support for Promise chaining operations
-- ⚡ **Concurrency Control**: Provides All, Race, Any and other concurrency methods
+- 🔄 **Chainable**: Support Promise chaining operations
+- ⚡ **Concurrency Control**: Provide All, Race, Any and other concurrency methods
 - 🎯 **Zero Dependencies**: Pure Go implementation, no external dependencies
+- 🎛️ **Flexible Configuration**: Support global and custom Promise managers
+- 🔧 **Resource Isolation**: Different managers don't affect each other, support independent configuration
 
 ## 📦 Installation
 
@@ -158,26 +160,39 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 ### Benchmark Results
 
 ```
-BenchmarkPromiseCreation-12      3109549               350.9 ns/op           288 B/op          5 allocs/op
-BenchmarkPromiseThen-12          1856625               646.2 ns/op           440 B/op          8 allocs/op
-BenchmarkPromiseAwait-12        100000000               11.34 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12       3588987               346.4 ns/op           144 B/op          3 allocs/op
-BenchmarkPromiseChain-12          250549              4303 ns/op            4687 B/op         74 allocs/op
-BenchmarkNormalExecution-12      1325180               907.2 ns/op           759 B/op         13 allocs/op
-BenchmarkPanicHandling-12        1000000              1025 ns/op             743 B/op         12 allocs/op
+BenchmarkPromiseCreation-8               3370664               345.2 ns/op           400 B/op          7 allocs/op
+BenchmarkPromiseThen-8                   2917953               389.0 ns/op           424 B/op          8 allocs/op
+BenchmarkPromiseChain-8                   186642              6077 ns/op            4623 B/op         76 allocs/op
+BenchmarkCustomManagerCreation-8          164284              6895 ns/op            9762 B/op         17 allocs/op
+BenchmarkPromiseCreationOnly-8           3311540               564.3 ns/op           399 B/op          6 allocs/op
+BenchmarkCustomManagerPromiseCreationOnly-8 2990803               573.2 ns/op           399 B/op          6 allocs/op
 ```
 
 ### Performance Analysis
 
 | Operation | Performance | Memory Allocation | Description |
 |-----------|-------------|-------------------|-------------|
-| **Promise Creation** | 350.9 ns/op | 288 B/op | Basic Promise instance creation |
-| **Microtask Scheduling** | 346.4 ns/op | 144 B/op | Microtask queue scheduling |
-| **Promise Chain** | 4303 ns/op | 4687 B/op | 10-level Promise chaining |
-| **Then Operation** | 646.2 ns/op | 440 B/op | Adding Then callback |
-| **Await Wait** | 11.34 ns/op | 0 B/op | Waiting for completed Promise |
-| **Normal Execution** | 907.2 ns/op | 759 B/op | Complete Promise execution flow |
-| **Exception Handling** | 1025 ns/op | 743 B/op | Promise with panic recovery |
+| **Promise Creation** | 345.2 ns/op | 400 B/op | Basic Promise instance creation |
+| **Then Operation** | 389.0 ns/op | 424 B/op | Adding Then callback |
+| **Promise Chain** | 6077 ns/op | 4623 B/op | 10-level Promise chaining |
+| **Custom Manager Creation** | 6895 ns/op | 9762 B/op | Creating custom Promise manager |
+| **Promise Creation (Creation Only)** | 564.3 ns/op | 399 B/op | Only creating Promise, not waiting for execution |
+| **Custom Manager Promise Creation** | 573.2 ns/op | 399 B/op | Creating Promise with custom manager |
+
+### Manager Performance Comparison
+
+| Scenario | Global Manager | Custom Manager | Performance Difference |
+|----------|----------------|----------------|----------------------|
+| **Promise Creation** | 345.2 ns/op | 573.2 ns/op | Custom manager slightly slower (66%) |
+| **Memory Allocation** | 400 B/op | 399 B/op | Basically the same |
+| **Resource Isolation** | Shared resources | Independent resources | Custom manager provides better isolation |
+
+### Performance Optimization Tips
+
+1. **High Concurrency Scenarios**: Use global manager to reduce resource creation overhead
+2. **Resource Isolation Requirements**: Use custom manager to avoid different businesses affecting each other
+3. **Batch Operations**: Reuse manager instances to avoid frequent creation and destruction
+4. **Microtask Configuration**: Adjust BufferSize and WorkerCount according to actual load
 
 ## 🧪 Testing
 
@@ -211,6 +226,50 @@ promise.SetMicrotaskConfig(&promise.MicrotaskConfig{
     BufferSize:  2000,        // Task buffer size
     WorkerCount: 8,           // Worker goroutine count
 })
+```
+
+### Promise Manager Configuration
+
+```go
+import "github.com/fupengl/promise"
+
+// Method 1: Configure through global manager
+promise.GetDefaultMgr().SetMicrotaskConfig(&promise.MicrotaskConfig{
+    BufferSize:  3000,
+    WorkerCount: 6,
+})
+promise.GetDefaultMgr().SetExecutorWorker(8)
+
+// Method 2: Create custom manager
+customMgr := promise.NewPromiseMgrWithConfig(4, &promise.MicrotaskConfig{
+    BufferSize:  1000,
+    WorkerCount: 2,
+})
+
+// Create Promise using custom manager
+p := promise.NewWithMgr(customMgr, func(resolve func(string), reject func(error)) {
+    resolve("Hello from custom manager!")
+})
+
+// Cleanup resources
+defer customMgr.Close()
+```
+
+### Manager API
+
+```go
+// Get global default manager
+defaultMgr := promise.GetDefaultMgr()
+
+// Configure microtask
+defaultMgr.SetMicrotaskConfig(config)
+defaultMgr.GetMicrotaskConfig()
+
+// Configure executor worker count
+defaultMgr.SetExecutorWorker(workers)
+
+// Reset default manager
+promise.ResetDefaultMgr(workers, microtaskConfig)
 ```
 
 ## 📖 Complete Documentation

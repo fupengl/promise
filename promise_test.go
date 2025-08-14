@@ -450,25 +450,23 @@ func TestRejectFunction(t *testing.T) {
 func TestMicrotaskConfig(t *testing.T) {
 	// Test default config
 	defaultConfig := DefaultMicrotaskConfig()
-	if defaultConfig.BufferSize != 1000 {
-		t.Errorf("Expected default BufferSize 1000, got %d", defaultConfig.BufferSize)
+	if defaultConfig.BufferSize != 10000 {
+		t.Errorf("Expected default BufferSize 10000, got %d", defaultConfig.BufferSize)
 	}
-	if defaultConfig.WorkerCount != runtime.NumCPU() {
-		t.Errorf("Expected default WorkerCount %d, got %d", runtime.NumCPU(), defaultConfig.WorkerCount)
+	if defaultConfig.WorkerCount != runtime.NumCPU()*2 {
+		t.Errorf("Expected default WorkerCount %d, got %d", runtime.NumCPU()*2, defaultConfig.WorkerCount)
 	}
 
-	// Test custom config
-	customConfig := &MicrotaskConfig{
-		BufferSize:  2000,
-		WorkerCount: 4,
+	// Test that we can get the default manager
+	defaultMgr := GetDefaultMgr()
+	if defaultMgr == nil {
+		t.Error("Default manager should not be nil")
 	}
-	SetMicrotaskConfig(customConfig)
 
-	// Test nil config (should use default)
-	SetMicrotaskConfig(nil)
-	nilConfig := DefaultMicrotaskConfig()
-	if nilConfig.BufferSize != 1000 {
-		t.Error("Nil config should use default values")
+	// Test that we can get the current config
+	currentConfig := defaultMgr.GetMicrotaskConfig()
+	if currentConfig.BufferSize != 10000 {
+		t.Errorf("Expected default BufferSize 10000, got %d", currentConfig.BufferSize)
 	}
 }
 
@@ -488,5 +486,166 @@ func TestPromiseAwaitWithContextTimeout(t *testing.T) {
 	}
 	if err != context.DeadlineExceeded {
 		t.Errorf("Expected DeadlineExceeded error, but got: %v", err)
+	}
+}
+
+// TestGlobalManagerConfiguration tests global manager configuration
+func TestGlobalManagerConfiguration(t *testing.T) {
+	// Test default manager
+	defaultMgr := GetDefaultMgr()
+	if defaultMgr == nil {
+		t.Error("Default manager should not be nil")
+	}
+
+	// Test setting microtask config
+	customConfig := &MicrotaskConfig{
+		BufferSize:  2000,
+		WorkerCount: 4,
+	}
+
+	err := defaultMgr.SetMicrotaskConfig(customConfig)
+	if err != nil {
+		t.Errorf("Failed to set microtask config: %v", err)
+	}
+
+	// Verify config was set
+	currentConfig := defaultMgr.GetMicrotaskConfig()
+	if currentConfig.BufferSize != 2000 {
+		t.Errorf("Expected BufferSize 2000, got %d", currentConfig.BufferSize)
+	}
+	if currentConfig.WorkerCount != 4 {
+		t.Errorf("Expected WorkerCount 4, got %d", currentConfig.WorkerCount)
+	}
+
+	// Test setting executor workers
+	err = defaultMgr.SetExecutorWorker(8)
+	if err != nil {
+		t.Errorf("Failed to set executor workers: %v", err)
+	}
+
+	if defaultMgr.Workers() != 8 {
+		t.Errorf("Expected 8 workers, got %d", defaultMgr.Workers())
+	}
+}
+
+// TestCustomManager tests custom manager functionality
+func TestCustomManager(t *testing.T) {
+	// Create custom manager
+	customConfig := &MicrotaskConfig{
+		BufferSize:  1000,
+		WorkerCount: 2,
+	}
+
+	customMgr := NewPromiseMgrWithConfig(4, customConfig)
+	if customMgr == nil {
+		t.Error("Custom manager should not be nil")
+	}
+
+	// Verify custom config
+	config := customMgr.GetMicrotaskConfig()
+	if config.BufferSize != 1000 {
+		t.Errorf("Expected BufferSize 1000, got %d", config.BufferSize)
+	}
+	if config.WorkerCount != 2 {
+		t.Errorf("Expected WorkerCount 2, got %d", config.WorkerCount)
+	}
+
+	// Verify worker count
+	if customMgr.Workers() != 4 {
+		t.Errorf("Expected 4 workers, got %d", customMgr.Workers())
+	}
+
+	// Test Promise creation with custom manager
+	p := NewWithMgr(customMgr, func(resolve func(string), reject func(error)) {
+		resolve("success")
+	})
+
+	if p == nil {
+		t.Error("Promise should not be nil")
+	}
+
+	// Wait for completion
+	result, err := p.Await()
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("Expected 'success', got %s", result)
+	}
+
+	// Cleanup
+	customMgr.Close()
+}
+
+// TestManagerIsolation tests that different managers are isolated
+func TestManagerIsolation(t *testing.T) {
+	// Create two different managers
+	mgr1 := NewPromiseMgrWithConfig(2, &MicrotaskConfig{BufferSize: 500, WorkerCount: 1})
+	mgr2 := NewPromiseMgrWithConfig(3, &MicrotaskConfig{BufferSize: 1000, WorkerCount: 2})
+
+	// Verify they have different configurations
+	if mgr1.Workers() == mgr2.Workers() {
+		t.Error("Managers should have different worker counts")
+	}
+
+	config1 := mgr1.GetMicrotaskConfig()
+	config2 := mgr2.GetMicrotaskConfig()
+
+	if config1.BufferSize == config2.BufferSize {
+		t.Error("Managers should have different buffer sizes")
+	}
+
+	// Create promises with different managers
+	p1 := NewWithMgr(mgr1, func(resolve func(string), reject func(error)) {
+		resolve("from mgr1")
+	})
+
+	p2 := NewWithMgr(mgr2, func(resolve func(string), reject func(error)) {
+		resolve("from mgr2")
+	})
+
+	// Both should work independently
+	result1, _ := p1.Await()
+	result2, _ := p2.Await()
+
+	if result1 != "from mgr1" {
+		t.Errorf("Expected 'from mgr1', got %s", result1)
+	}
+	if result2 != "from mgr2" {
+		t.Errorf("Expected 'from mgr2', got %s", result2)
+	}
+
+	// Cleanup
+	mgr1.Close()
+	mgr2.Close()
+}
+
+// TestResetDefaultManager tests resetting the default manager
+func TestResetDefaultManager(t *testing.T) {
+	// Get initial manager
+	initialMgr := GetDefaultMgr()
+
+	// Reset with new configuration
+	ResetDefaultMgr(6, &MicrotaskConfig{BufferSize: 1500, WorkerCount: 3})
+
+	// Get new manager
+	newMgr := GetDefaultMgr()
+
+	// Should be different instance
+	if initialMgr == newMgr {
+		t.Error("Manager should be reset to new instance")
+	}
+
+	// Verify new configuration
+	if newMgr.Workers() != 6 {
+		t.Errorf("Expected 6 workers, got %d", newMgr.Workers())
+	}
+
+	config := newMgr.GetMicrotaskConfig()
+	if config.BufferSize != 1500 {
+		t.Errorf("Expected BufferSize 1500, got %d", config.BufferSize)
+	}
+	if config.WorkerCount != 3 {
+		t.Errorf("Expected WorkerCount 3, got %d", config.WorkerCount)
 	}
 }

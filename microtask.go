@@ -13,8 +13,8 @@ type MicrotaskConfig struct {
 // DefaultMicrotaskConfig returns the default configuration
 func DefaultMicrotaskConfig() *MicrotaskConfig {
 	return &MicrotaskConfig{
-		BufferSize:  1000,
-		WorkerCount: runtime.NumCPU(),
+		BufferSize:  10000,
+		WorkerCount: runtime.NumCPU() * 2,
 	}
 }
 
@@ -28,17 +28,6 @@ type microTask struct {
 type microTaskQueue struct {
 	tasks  chan *microTask
 	config *MicrotaskConfig
-}
-
-var globalMicroTaskQueue = newMicrotaskQueue(DefaultMicrotaskConfig())
-
-// SetMicrotaskConfig sets the configuration for the microtask queue
-// This must be called before any promises are created
-func SetMicrotaskConfig(config *MicrotaskConfig) {
-	if config == nil {
-		config = DefaultMicrotaskConfig()
-	}
-	globalMicroTaskQueue = newMicrotaskQueue(config)
 }
 
 // newMicrotaskQueue creates a new microtask queue
@@ -62,19 +51,4 @@ func (q *microTaskQueue) worker() {
 		task.fn()
 		close(task.done)
 	}
-}
-
-// scheduleMicrotask schedules a function to run as a microtask
-func scheduleMicrotask(fn func()) {
-	// Create a new channel for each task
-	done := make(chan struct{})
-
-	task := &microTask{
-		fn:   fn,
-		done: done,
-	}
-
-	// Always queue the task, even if it means blocking
-	// This preserves the microtask execution order
-	globalMicroTaskQueue.tasks <- task
 }

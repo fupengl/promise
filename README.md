@@ -15,6 +15,8 @@
 - 🔄 **链式调用**: 支持Promise链式操作
 - ⚡ **并发控制**: 提供All、Race、Any等并发方法
 - 🎯 **零依赖**: 纯Go实现，无外部依赖
+- 🎛️ **灵活配置**: 支持全局和自定义Promise管理器
+- 🔧 **资源隔离**: 不同管理器之间互不影响，支持独立配置
 
 ## 📦 安装
 
@@ -48,6 +50,35 @@ func main() {
     // 等待结果
     finalValue, _ := result.Await()
     fmt.Println(finalValue) // 输出: Hello, Promise! World!
+}
+```
+
+### 使用自定义管理器
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/fupengl/promise"
+)
+
+func main() {
+    // 创建自定义管理器
+    customMgr := promise.NewPromiseMgrWithConfig(4, &promise.MicrotaskConfig{
+        BufferSize:  1000,
+        WorkerCount: 2,
+    })
+    defer customMgr.Close()
+
+    // 使用自定义管理器创建Promise
+    p := promise.NewWithMgr(customMgr, func(resolve func(string), reject func(error)) {
+        resolve("Hello from custom manager!")
+    })
+
+    // 等待结果
+    result, _ := p.Await()
+    fmt.Println(result) // 输出: Hello from custom manager!
 }
 ```
 
@@ -86,6 +117,9 @@ fmt.Printf("All completed: %v\n", results)
 ```go
 // 创建新Promise
 func New[T any](executor func(resolve func(T), reject func(error))) *Promise[T]
+
+// 使用指定管理器创建Promise
+func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), reject func(error))) *Promise[T]
 
 // 创建已完成的Promise
 func Resolve[T any](value T) *Promise[T]
@@ -148,6 +182,22 @@ func Map[T any, R any](items []T, fn func(T) *Promise[R]) *Promise[[]R]
 func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Promise[R]
 ```
 
+### 管理器函数
+
+```go
+// 获取全局默认管理器
+func GetDefaultMgr() *PromiseMgr
+
+// 重置默认管理器配置
+func ResetDefaultMgr(workers int, microtaskConfig *MicrotaskConfig)
+
+// 创建Promise管理器
+func NewPromiseMgr(workers int) *PromiseMgr
+
+// 创建带配置的Promise管理器
+func NewPromiseMgrWithConfig(workers int, microtaskConfig *MicrotaskConfig) *PromiseMgr
+```
+
 ## 📊 性能测试结果
 
 ### 测试环境
@@ -158,26 +208,39 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 ### 基准测试结果
 
 ```
-BenchmarkPromiseCreation-12      3109549               350.9 ns/op           288 B/op          5 allocs/op
-BenchmarkPromiseThen-12          1856625               646.2 ns/op           440 B/op          8 allocs/op
-BenchmarkPromiseAwait-12        100000000               11.34 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12       3588987               346.4 ns/op           144 B/op          3 allocs/op
-BenchmarkPromiseChain-12          250549              4303 ns/op            4687 B/op         74 allocs/op
-BenchmarkNormalExecution-12      1325180               907.2 ns/op           759 B/op         13 allocs/op
-BenchmarkPanicHandling-12        1000000              1025 ns/op             743 B/op         12 allocs/op
+BenchmarkPromiseCreation-8               3370664               345.2 ns/op           400 B/op          7 allocs/op
+BenchmarkPromiseThen-8                   2917953               389.0 ns/op           424 B/op          8 allocs/op
+BenchmarkPromiseChain-8                   186642              6077 ns/op            4623 B/op         76 allocs/op
+BenchmarkCustomManagerCreation-8          164284              6895 ns/op            9762 B/op         17 allocs/op
+BenchmarkPromiseCreationOnly-8           3311540               564.3 ns/op           399 B/op          6 allocs/op
+BenchmarkCustomManagerPromiseCreationOnly-8 2990803               573.2 ns/op           399 B/op          6 allocs/op
 ```
 
 ### 性能分析
 
 | 操作 | 性能 | 内存分配 | 说明 |
 |------|------|----------|------|
-| **Promise创建** | 350.9 ns/op | 288 B/op | 基础Promise实例创建 |
-| **微任务调度** | 346.4 ns/op | 144 B/op | 微任务队列调度 |
-| **Promise链** | 4303 ns/op | 4687 B/op | 10级Promise链式调用 |
-| **Then操作** | 646.2 ns/op | 440 B/op | 添加Then回调 |
-| **Await等待** | 11.34 ns/op | 0 B/op | 等待已完成的Promise |
-| **正常执行** | 907.2 ns/op | 759 B/op | 完整Promise执行流程 |
-| **异常处理** | 1025 ns/op | 743 B/op | 包含panic恢复的Promise |
+| **Promise创建** | 345.2 ns/op | 400 B/op | 基础Promise实例创建 |
+| **Then操作** | 389.0 ns/op | 424 B/op | 添加Then回调 |
+| **Promise链** | 6077 ns/op | 4623 B/op | 10级Promise链式调用 |
+| **自定义管理器创建** | 6895 ns/op | 9762 B/op | 创建自定义Promise管理器 |
+| **Promise创建(仅创建)** | 564.3 ns/op | 399 B/op | 仅创建Promise，不等待执行 |
+| **自定义管理器Promise创建** | 573.2 ns/op | 399 B/op | 使用自定义管理器创建Promise |
+
+### 管理器性能对比
+
+| 场景 | 全局管理器 | 自定义管理器 | 性能差异 |
+|------|------------|--------------|----------|
+| **Promise创建** | 345.2 ns/op | 573.2 ns/op | 自定义管理器稍慢(66%) |
+| **内存分配** | 400 B/op | 399 B/op | 基本相同 |
+| **资源隔离** | 共享资源 | 独立资源 | 自定义管理器提供更好的隔离性 |
+
+### 性能优化建议
+
+1. **高并发场景**: 使用全局管理器，减少资源创建开销
+2. **资源隔离需求**: 使用自定义管理器，避免不同业务相互影响
+3. **批量操作**: 复用管理器实例，避免频繁创建销毁
+4. **微任务配置**: 根据实际负载调整BufferSize和WorkerCount
 
 
 
@@ -213,6 +276,50 @@ promise.SetMicrotaskConfig(&promise.MicrotaskConfig{
     BufferSize:  2000,        // 任务缓冲区大小
     WorkerCount: 8,           // 工作协程数量
 })
+```
+
+### Promise管理器配置
+
+```go
+import "github.com/fupengl/promise"
+
+// 方式1：通过全局管理器配置
+promise.GetDefaultMgr().SetMicrotaskConfig(&promise.MicrotaskConfig{
+    BufferSize:  3000,
+    WorkerCount: 6,
+})
+promise.GetDefaultMgr().SetExecutorWorker(8)
+
+// 方式2：创建自定义管理器
+customMgr := promise.NewPromiseMgrWithConfig(4, &promise.MicrotaskConfig{
+    BufferSize:  1000,
+    WorkerCount: 2,
+})
+
+// 使用自定义管理器创建Promise
+p := promise.NewWithMgr(customMgr, func(resolve func(string), reject func(error)) {
+    resolve("Hello from custom manager!")
+})
+
+// 清理资源
+defer customMgr.Close()
+```
+
+### 管理器API
+
+```go
+// 获取全局默认管理器
+defaultMgr := promise.GetDefaultMgr()
+
+// 配置微任务
+defaultMgr.SetMicrotaskConfig(config)
+defaultMgr.GetMicrotaskConfig()
+
+// 配置executor worker数量
+defaultMgr.SetExecutorWorker(workers)
+
+// 重置默认管理器
+promise.ResetDefaultMgr(workers, microtaskConfig)
 ```
 
 ## 📖 完整文档

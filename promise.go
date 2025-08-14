@@ -5,14 +5,23 @@ import (
 	"errors"
 )
 
-// New creates a new Promise
+// New creates a new Promise using the default manager
 func New[T any](executor func(resolve func(T), reject func(error))) *Promise[T] {
+	return NewWithMgr(GetDefaultMgr(), executor)
+}
+
+// NewWithManager creates a new Promise using the specified manager
+func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), reject func(error))) *Promise[T] {
 	p := &Promise[T]{
-		state: Pending,
+		manager: manager,
 	}
 
-	// Execute executor asynchronously
-	go func() {
+	// Initialize atomic values
+	p.state.Store(Pending)
+	// handlers remain lazy initialized, only created when Then is called
+
+	// Execute executor asynchronously using the manager
+	manager.scheduleExecutor(func() {
 		defer func() {
 			if r := recover(); r != nil {
 				if err, ok := r.(error); ok {
@@ -24,103 +33,100 @@ func New[T any](executor func(resolve func(T), reject func(error))) *Promise[T] 
 		}()
 
 		executor(p.resolve, p.reject)
-	}()
+	})
 
 	return p
 }
 
 // resolve fulfills the Promise
 func (p *Promise[T]) resolve(value T) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.state != Pending {
-		return
+	// 1. Atomically set state to avoid duplicate resolve
+	if !p.setState(Fulfilled) {
+		return // Already completed, return directly
 	}
 
-	p.state = Fulfilled
-	p.value = value
+	// 2. Atomically set value
+	p.setValue(value)
 
+	// 3. Acquire lock to handle handlers and done channel
+	p.mu.Lock()
+
+	// 4. Close done channel
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
+	close(p.done)
 
-	select {
-	case <-p.done:
-		// Channel already closed, do nothing
-		return
-	default:
-		// Channel not closed, close it
-		close(p.done)
-	}
+	// 5. Process handlers
+	handlers := p.handlers
+	p.handlers = nil // Clear handlers to avoid duplicate processing
 
-	if p.handlers == nil {
-		return
-	}
+	p.mu.Unlock()
 
-	// Execute all fulfilled handlers using microtask queue
-	for _, h := range p.handlers {
-		if h.onFulfilled != nil {
-			// Capture values to avoid race conditions
-			handler := h.onFulfilled
-			next := h.next
-			val := value
+	// 6. Schedule microtasks outside of lock
+	if handlers != nil {
+		for _, h := range handlers {
+			if h.onFulfilled != nil {
+				// Capture values to avoid race conditions
+				handler := h.onFulfilled
+				next := h.next
+				val := value
 
-			scheduleMicrotask(func() {
-				safeCallback(handler, val, next)
-			})
+				p.manager.scheduleMicrotask(func() {
+					safeCallback(handler, val, next)
+				})
+			}
 		}
 	}
 }
 
 // reject rejects the Promise
 func (p *Promise[T]) reject(err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.state != Pending {
-		return
+	// 1. Atomically set state to avoid duplicate reject
+	if !p.setState(Rejected) {
+		return // Already completed, return directly
 	}
 
-	p.state = Rejected
-	p.err = err
+	// 2. Atomically set error
+	p.setError(err)
 
+	// 3. Acquire lock to handle handlers and done channel
+	p.mu.Lock()
+
+	// 4. Close done channel
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
+	close(p.done)
 
-	select {
-	case <-p.done:
-		// Channel already closed, do nothing
-		return
-	default:
-		// Channel not closed, close it
-		close(p.done)
-	}
+	// 5. Process handlers
+	handlers := p.handlers
+	p.handlers = nil // Clear handlers to avoid duplicate processing
 
-	if p.handlers == nil {
-		return
-	}
+	p.mu.Unlock()
 
-	// Execute all rejected handlers using microtask queue
-	for _, h := range p.handlers {
-		if h.onRejected != nil {
-			// Capture values to avoid race conditions
-			handler := h.onRejected
-			next := h.next
-			errVal := err
+	// 6. Schedule microtasks outside of lock
+	if handlers != nil {
+		for _, h := range handlers {
+			if h.onRejected != nil {
+				// Capture values to avoid race conditions
+				handler := h.onRejected
+				next := h.next
+				errVal := err
 
-			scheduleMicrotask(func() {
-				safeErrorCallback(handler, errVal, next)
-			})
-		} else if h.next != nil {
-			// If no rejected handler, pass error to next Promise
-			// This follows JavaScript Promise behavior
-			next := h.next
-			errVal := err
-			scheduleMicrotask(func() {
-				next.reject(errVal)
-			})
+				p.manager.scheduleMicrotask(func() {
+					safeErrorCallback(handler, errVal, next)
+				})
+			} else if h.next != nil {
+				// If no rejected handler, pass error to next Promise
+				// This follows JavaScript Promise behavior
+				next := h.next
+				errVal := err
+
+				p.manager.scheduleMicrotask(func() {
+					next.reject(errVal)
+				})
+			}
 		}
 	}
 }
@@ -128,9 +134,12 @@ func (p *Promise[T]) reject(err error) {
 // Then adds fulfilled and rejected handlers
 func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *Promise[any] {
 	next := &Promise[any]{
-		state: Pending,
-		done:  make(chan struct{}),
+		done:    make(chan struct{}),
+		manager: p.manager, // Copy manager from parent Promise
 	}
+
+	// Initialize atomic values
+	next.state.Store(Pending)
 
 	h := &handler[T]{
 		onFulfilled: onFulfilled,
@@ -138,42 +147,47 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 		next:        next,
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// 1. Check state first to avoid unnecessary locking
+	state := p.getState()
 
-	// If Promise is already completed, execute handlers using microtask queue
-	if p.state == Fulfilled {
+	if state == Fulfilled {
+		// Already completed, execute directly
 		if onFulfilled != nil {
-			// Capture values to avoid race conditions
-			handler := onFulfilled
-			val := p.value
-
-			scheduleMicrotask(func() {
-				safeCallback(handler, val, next)
+			value, _ := p.getValue()
+			p.manager.scheduleMicrotask(func() {
+				safeCallback(onFulfilled, value, next)
 			})
 		} else {
-			next.resolve(p.value)
+			value, _ := p.getValue()
+			next.resolve(value)
 		}
-	} else if p.state == Rejected {
+		return next
+	}
+
+	if state == Rejected {
+		// Already rejected, execute directly
 		if onRejected != nil {
-			// Capture values to avoid race conditions
-			handler := onRejected
-			errVal := p.err
-
-			scheduleMicrotask(func() {
-				safeErrorCallback(handler, errVal, next)
+			err, _ := p.getError()
+			p.manager.scheduleMicrotask(func() {
+				safeErrorCallback(onRejected, err, next)
 			})
 		} else {
-			next.reject(p.err)
+			err, _ := p.getError()
+			next.reject(err)
 		}
-	} else {
-		// Promise is still pending, add handler
-		// Lazy initialize handlers slice
+		return next
+	}
+
+	// 2. State is Pending, need to add handler
+	p.mu.Lock()
+	// Check state again to avoid race conditions
+	if p.getState() == Pending {
 		if p.handlers == nil {
 			p.handlers = make([]*handler[T], 0, 4)
 		}
 		p.handlers = append(p.handlers, h)
 	}
+	p.mu.Unlock()
 
 	return next
 }
@@ -186,9 +200,12 @@ func (p *Promise[T]) Catch(onRejected func(error) any) *Promise[any] {
 // Finally adds a finally handler
 func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	next := &Promise[T]{
-		state: Pending,
-		done:  make(chan struct{}),
+		done:    make(chan struct{}),
+		manager: p.manager, // Copy manager from parent Promise
 	}
+
+	// Initialize atomic values
+	next.state.Store(Pending)
 
 	// Create a handler that will execute the finally callback
 	h := &handler[T]{
@@ -197,7 +214,8 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 			return nil
 		},
 		onRejected: func(err error) any {
-			safeFinallyCallback(onFinally, next, p.value, err)
+			value, _ := p.getValue()
+			safeFinallyCallback(onFinally, next, value, err)
 			return nil
 		},
 		next: nil, // We don't need to chain to another promise here
@@ -207,20 +225,20 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	defer p.mu.Unlock()
 
 	// If Promise is already completed, execute handlers using microtask queue
-	if p.state == Fulfilled {
+	if p.getState() == Fulfilled {
 		// Capture values to avoid race conditions
 		handler := h.onFulfilled
-		val := p.value
+		val, _ := p.getValue()
 
-		scheduleMicrotask(func() {
+		p.manager.scheduleMicrotask(func() {
 			handler(val)
 		})
-	} else if p.state == Rejected {
+	} else if p.getState() == Rejected {
 		// Capture values to avoid race conditions
 		handler := h.onRejected
-		errVal := p.err
+		errVal, _ := p.getError()
 
-		scheduleMicrotask(func() {
+		p.manager.scheduleMicrotask(func() {
 			handler(errVal)
 		})
 	} else {
@@ -244,11 +262,13 @@ func (p *Promise[T]) Await() (T, error) {
 	// Wait for completion signal instead of polling
 	<-p.done
 
-	if p.state == Fulfilled {
-		return p.value, nil
+	if p.getState() == Fulfilled {
+		value, _ := p.getValue()
+		return value, nil
 	}
 	var zero T
-	return zero, p.err
+	err, _ := p.getError()
+	return zero, err
 }
 
 // AwaitWithContext waits for Promise completion using context
@@ -265,18 +285,18 @@ func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
 		// Promise completed
 	}
 
-	if p.state == Fulfilled {
-		return p.value, nil
+	if p.getState() == Fulfilled {
+		value, _ := p.getValue()
+		return value, nil
 	}
 	var zero T
-	return zero, p.err
+	err, _ := p.getError()
+	return zero, err
 }
 
 // State gets the Promise state
 func (p *Promise[T]) State() State {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.state
+	return p.getState()
 }
 
 // IsPending checks if Promise is in pending state

@@ -6,25 +6,29 @@ import (
 	"time"
 )
 
-// Resolve creates a fulfilled Promise
+// Resolve creates a resolved Promise
 func Resolve[T any](value T) *Promise[T] {
 	p := &Promise[T]{
-		state: Fulfilled,
-		value: value,
-		done:  make(chan struct{}),
+		done: make(chan struct{}),
 	}
-	close(p.done) // Signal completion immediately
+
+	// Use helper functions to set state and value atomically
+	p.setState(Fulfilled)
+	p.setValue(value)
+	close(p.done)
 	return p
 }
 
 // Reject creates a rejected Promise
 func Reject[T any](err error) *Promise[T] {
 	p := &Promise[T]{
-		state: Rejected,
-		err:   err,
-		done:  make(chan struct{}),
+		done: make(chan struct{}),
 	}
-	close(p.done) // Signal completion immediately
+
+	// Use helper functions to set state and error atomically
+	p.setState(Rejected)
+	p.setError(err)
+	close(p.done)
 	return p
 }
 
