@@ -180,8 +180,7 @@ func ExampleReduce() {
 	fmt.Printf("Sum: %d\n", result)
 	// Output: Sum: 15
 }
-
-func ExampleGlobalManagerConfiguration() {
+func ExamplePromiseMgr_SetMicrotaskConfig() {
 	// Method 1: Configure microtask through global manager
 	GetDefaultMgr().SetMicrotaskConfig(&MicrotaskConfig{
 		BufferSize:  3000,
@@ -221,7 +220,7 @@ func ExampleGlobalManagerConfiguration() {
 	customMgr.Close()
 }
 
-func ExampleCustomManagerIsolation() {
+func ExampleNewPromiseMgrWithConfig() {
 	// Create two different managers with different configurations
 	mgr1 := NewPromiseMgrWithConfig(2, &MicrotaskConfig{
 		BufferSize:  500,
@@ -256,7 +255,7 @@ func ExampleCustomManagerIsolation() {
 	mgr2.Close()
 }
 
-func ExampleResetDefaultManager() {
+func ExampleGetDefaultMgr() {
 	// Get current default manager
 	currentMgr := GetDefaultMgr()
 	fmt.Printf("Current workers: %d\n", currentMgr.Workers())

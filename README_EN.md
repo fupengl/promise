@@ -160,39 +160,31 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 ### Benchmark Results
 
 ```
-BenchmarkPromiseCreation-8               3370664               345.2 ns/op           400 B/op          7 allocs/op
-BenchmarkPromiseThen-8                   2917953               389.0 ns/op           424 B/op          8 allocs/op
-BenchmarkPromiseChain-8                   186642              6077 ns/op            4623 B/op         76 allocs/op
-BenchmarkCustomManagerCreation-8          164284              6895 ns/op            9762 B/op         17 allocs/op
-BenchmarkPromiseCreationOnly-8           3311540               564.3 ns/op           399 B/op          6 allocs/op
-BenchmarkCustomManagerPromiseCreationOnly-8 2990803               573.2 ns/op           399 B/op          6 allocs/op
+BenchmarkPromiseCreation-12              2100846               559.3 ns/op           448 B/op          8 allocs/op
+BenchmarkPromiseThen-12                  3609886               342.6 ns/op           336 B/op          7 allocs/op
+BenchmarkPromiseAwait-12                90184309                14.07 ns/op            0 B/op          0 allocs/op
+BenchmarkMicrotaskQueue-12               9050398               130.2 ns/op            24 B/op          2 allocs/op
+BenchmarkPromiseChain-12                  152283             14239 ns/op            4227 B/op         72 allocs/op
+BenchmarkSimplePromiseChain-12            208448              6225 ns/op            2551 B/op         42 allocs/op
 ```
 
 ### Performance Analysis
 
 | Operation | Performance | Memory Allocation | Description |
 |-----------|-------------|-------------------|-------------|
-| **Promise Creation** | 345.2 ns/op | 400 B/op | Basic Promise instance creation |
-| **Then Operation** | 389.0 ns/op | 424 B/op | Adding Then callback |
-| **Promise Chain** | 6077 ns/op | 4623 B/op | 10-level Promise chaining |
-| **Custom Manager Creation** | 6895 ns/op | 9762 B/op | Creating custom Promise manager |
-| **Promise Creation (Creation Only)** | 564.3 ns/op | 399 B/op | Only creating Promise, not waiting for execution |
-| **Custom Manager Promise Creation** | 573.2 ns/op | 399 B/op | Creating Promise with custom manager |
+| **Promise Creation** | 559.3 ns/op | 448 B/op | Basic Promise instance creation |
+| **Then Operation** | 342.6 ns/op | 336 B/op | Adding Then callback |
+| **Promise Await** | 14.07 ns/op | 0 B/op | Promise await completion |
+| **Microtask Scheduling** | 130.2 ns/op | 24 B/op | Microtask queue scheduling |
+| **Long Promise Chain (10)** | 14,239 ns/op | 4,227 B/op | 10-level Promise chaining |
+| **Simple Promise Chain (5)** | 6,225 ns/op | 2,551 B/op | 5-level Promise chaining |
 
-### Manager Performance Comparison
+### Performance Highlights
 
-| Scenario | Global Manager | Custom Manager | Performance Difference |
-|----------|----------------|----------------|----------------------|
-| **Promise Creation** | 345.2 ns/op | 573.2 ns/op | Custom manager slightly slower (66%) |
-| **Memory Allocation** | 400 B/op | 399 B/op | Basically the same |
-| **Resource Isolation** | Shared resources | Independent resources | Custom manager provides better isolation |
-
-### Performance Optimization Tips
-
-1. **High Concurrency Scenarios**: Use global manager to reduce resource creation overhead
-2. **Resource Isolation Requirements**: Use custom manager to avoid different businesses affecting each other
-3. **Batch Operations**: Reuse manager instances to avoid frequent creation and destruction
-4. **Microtask Configuration**: Adjust BufferSize and WorkerCount according to actual load
+- ⭐ **Excellent Promise Await Performance**: Only 14.07 nanoseconds, can handle 90 million operations per second
+- ⭐ **Efficient Microtask Scheduling**: 130.2 nanoseconds scheduling time, suitable for high-frequency async operations
+- ⭐ **Reasonable Memory Allocation**: Each Promise is about 448 bytes, controllable memory overhead
+- ⭐ **Smooth Chaining Operations**: Each Then operation only takes 342.6 nanoseconds
 
 ## 🧪 Testing
 

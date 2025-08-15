@@ -83,21 +83,13 @@ func (m *PromiseMgr) scheduleExecutor(executor func()) {
 		// Task submitted successfully
 	default:
 		// Execute immediately if channel is full
-		executor()
+		go executor()
 	}
 }
 
 // ScheduleMicrotask schedules a microtask using this manager's queue
 func (m *PromiseMgr) scheduleMicrotask(fn func()) {
-	done := make(chan struct{})
-	task := &microTask{
-		fn:   fn,
-		done: done,
-	}
-
-	// Submit to queue and wait for completion
-	m.microtaskQueue.tasks <- task
-	<-done
+	m.microtaskQueue.schedule(fn)
 }
 
 // GetMicrotaskConfig returns the current microtask configuration
@@ -106,13 +98,11 @@ func (m *PromiseMgr) GetMicrotaskConfig() *MicrotaskConfig {
 }
 
 // SetMicrotaskConfig updates the microtask configuration
-// This should be called before any promises are created with this manager
 func (m *PromiseMgr) SetMicrotaskConfig(config *MicrotaskConfig) error {
 	if config == nil {
 		config = DefaultMicrotaskConfig()
 	}
 
-	// Check if there are running microtasks
 	if len(m.microtaskQueue.tasks) > 0 {
 		return errors.New("cannot update config while microtasks are running")
 	}

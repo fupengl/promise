@@ -208,39 +208,31 @@ func NewPromiseMgrWithConfig(workers int, microtaskConfig *MicrotaskConfig) *Pro
 ### 基准测试结果
 
 ```
-BenchmarkPromiseCreation-8               3370664               345.2 ns/op           400 B/op          7 allocs/op
-BenchmarkPromiseThen-8                   2917953               389.0 ns/op           424 B/op          8 allocs/op
-BenchmarkPromiseChain-8                   186642              6077 ns/op            4623 B/op         76 allocs/op
-BenchmarkCustomManagerCreation-8          164284              6895 ns/op            9762 B/op         17 allocs/op
-BenchmarkPromiseCreationOnly-8           3311540               564.3 ns/op           399 B/op          6 allocs/op
-BenchmarkCustomManagerPromiseCreationOnly-8 2990803               573.2 ns/op           399 B/op          6 allocs/op
+BenchmarkPromiseCreation-12              2100846               559.3 ns/op           448 B/op          8 allocs/op
+BenchmarkPromiseThen-12                  3609886               342.6 ns/op           336 B/op          7 allocs/op
+BenchmarkPromiseAwait-12                90184309                14.07 ns/op            0 B/op          0 allocs/op
+BenchmarkMicrotaskQueue-12               9050398               130.2 ns/op            24 B/op          2 allocs/op
+BenchmarkPromiseChain-12                  152283             14239 ns/op            4227 B/op         72 allocs/op
+BenchmarkSimplePromiseChain-12            208448              6225 ns/op            2551 B/op         42 allocs/op
 ```
 
 ### 性能分析
 
 | 操作 | 性能 | 内存分配 | 说明 |
 |------|------|----------|------|
-| **Promise创建** | 345.2 ns/op | 400 B/op | 基础Promise实例创建 |
-| **Then操作** | 389.0 ns/op | 424 B/op | 添加Then回调 |
-| **Promise链** | 6077 ns/op | 4623 B/op | 10级Promise链式调用 |
-| **自定义管理器创建** | 6895 ns/op | 9762 B/op | 创建自定义Promise管理器 |
-| **Promise创建(仅创建)** | 564.3 ns/op | 399 B/op | 仅创建Promise，不等待执行 |
-| **自定义管理器Promise创建** | 573.2 ns/op | 399 B/op | 使用自定义管理器创建Promise |
+| **Promise创建** | 559.3 ns/op | 448 B/op | 基础Promise实例创建 |
+| **Then操作** | 342.6 ns/op | 336 B/op | 添加Then回调 |
+| **Promise等待** | 14.07 ns/op | 0 B/op | Promise等待完成 |
+| **微任务调度** | 130.2 ns/op | 24 B/op | 微任务队列调度 |
+| **长Promise链(10个)** | 14,239 ns/op | 4,227 B/op | 10级Promise链式调用 |
+| **简单Promise链(5个)** | 6,225 ns/op | 2,551 B/op | 5级Promise链式调用 |
 
-### 管理器性能对比
+### 性能亮点
 
-| 场景 | 全局管理器 | 自定义管理器 | 性能差异 |
-|------|------------|--------------|----------|
-| **Promise创建** | 345.2 ns/op | 573.2 ns/op | 自定义管理器稍慢(66%) |
-| **内存分配** | 400 B/op | 399 B/op | 基本相同 |
-| **资源隔离** | 共享资源 | 独立资源 | 自定义管理器提供更好的隔离性 |
-
-### 性能优化建议
-
-1. **高并发场景**: 使用全局管理器，减少资源创建开销
-2. **资源隔离需求**: 使用自定义管理器，避免不同业务相互影响
-3. **批量操作**: 复用管理器实例，避免频繁创建销毁
-4. **微任务配置**: 根据实际负载调整BufferSize和WorkerCount
+- ⭐ **Promise等待性能极佳**: 仅需14.07纳秒，每秒可处理9000万次
+- ⭐ **微任务调度高效**: 130.2纳秒的调度时间，适合高频异步操作
+- ⭐ **内存分配合理**: 每个Promise约448字节，内存开销可控
+- ⭐ **链式操作流畅**: 每个Then操作仅需342.6纳秒
 
 
 

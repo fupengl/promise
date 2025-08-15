@@ -40,34 +40,25 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 
 // resolve fulfills the Promise
 func (p *Promise[T]) resolve(value T) {
-	// 1. Atomically set state to avoid duplicate resolve
 	if !p.setState(Fulfilled) {
-		return // Already completed, return directly
+		return
 	}
 
-	// 2. Atomically set value
 	p.setValue(value)
 
-	// 3. Acquire lock to handle handlers and done channel
 	p.mu.Lock()
-
-	// 4. Close done channel
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
 	close(p.done)
 
-	// 5. Process handlers
 	handlers := p.handlers
-	p.handlers = nil // Clear handlers to avoid duplicate processing
-
+	p.handlers = nil
 	p.mu.Unlock()
 
-	// 6. Schedule microtasks outside of lock
 	if handlers != nil {
 		for _, h := range handlers {
 			if h.onFulfilled != nil {
-				// Capture values to avoid race conditions
 				handler := h.onFulfilled
 				next := h.next
 				val := value
@@ -82,34 +73,25 @@ func (p *Promise[T]) resolve(value T) {
 
 // reject rejects the Promise
 func (p *Promise[T]) reject(err error) {
-	// 1. Atomically set state to avoid duplicate reject
 	if !p.setState(Rejected) {
-		return // Already completed, return directly
+		return
 	}
 
-	// 2. Atomically set error
 	p.setError(err)
 
-	// 3. Acquire lock to handle handlers and done channel
 	p.mu.Lock()
-
-	// 4. Close done channel
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
 	close(p.done)
 
-	// 5. Process handlers
 	handlers := p.handlers
-	p.handlers = nil // Clear handlers to avoid duplicate processing
-
+	p.handlers = nil
 	p.mu.Unlock()
 
-	// 6. Schedule microtasks outside of lock
 	if handlers != nil {
 		for _, h := range handlers {
 			if h.onRejected != nil {
-				// Capture values to avoid race conditions
 				handler := h.onRejected
 				next := h.next
 				errVal := err
@@ -118,8 +100,6 @@ func (p *Promise[T]) reject(err error) {
 					safeErrorCallback(handler, errVal, next)
 				})
 			} else if h.next != nil {
-				// If no rejected handler, pass error to next Promise
-				// This follows JavaScript Promise behavior
 				next := h.next
 				errVal := err
 
@@ -135,10 +115,9 @@ func (p *Promise[T]) reject(err error) {
 func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *Promise[any] {
 	next := &Promise[any]{
 		done:    make(chan struct{}),
-		manager: p.manager, // Copy manager from parent Promise
+		manager: p.manager,
 	}
 
-	// Initialize atomic values
 	next.state.Store(Pending)
 
 	h := &handler[T]{
@@ -147,11 +126,9 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 		next:        next,
 	}
 
-	// 1. Check state first to avoid unnecessary locking
 	state := p.getState()
 
 	if state == Fulfilled {
-		// Already completed, execute directly
 		if onFulfilled != nil {
 			value, _ := p.getValue()
 			p.manager.scheduleMicrotask(func() {
@@ -165,7 +142,6 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 	}
 
 	if state == Rejected {
-		// Already rejected, execute directly
 		if onRejected != nil {
 			err, _ := p.getError()
 			p.manager.scheduleMicrotask(func() {
@@ -178,9 +154,7 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 		return next
 	}
 
-	// 2. State is Pending, need to add handler
 	p.mu.Lock()
-	// Check state again to avoid race conditions
 	if p.getState() == Pending {
 		if p.handlers == nil {
 			p.handlers = make([]*handler[T], 0, 4)
@@ -201,10 +175,9 @@ func (p *Promise[T]) Catch(onRejected func(error) any) *Promise[any] {
 func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	next := &Promise[T]{
 		done:    make(chan struct{}),
-		manager: p.manager, // Copy manager from parent Promise
+		manager: p.manager,
 	}
 
-	// Initialize atomic values
 	next.state.Store(Pending)
 
 	// Create a handler that will execute the finally callback
@@ -317,12 +290,10 @@ func (p *Promise[T]) IsRejected() bool {
 // safeCallback wraps a callback function with panic recovery
 func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 	if next == nil {
-		// No next Promise, execute directly without panic handling
 		callback(value)
 		return
 	}
 
-	// Has next Promise, wrap with panic recovery
 	defer func() {
 		if r := recover(); r != nil {
 			var err error
@@ -342,12 +313,10 @@ func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 // safeErrorCallback wraps an error callback function with panic recovery
 func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) {
 	if next == nil {
-		// No next Promise, execute directly without panic handling
 		callback(err)
 		return
 	}
 
-	// Has next Promise, wrap with panic recovery
 	defer func() {
 		if r := recover(); r != nil {
 			var panicErr error
@@ -367,12 +336,10 @@ func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) 
 // safeFinallyCallback wraps a finally callback function with panic recovery
 func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err error) {
 	if next == nil {
-		// No next Promise, execute directly without panic handling
 		callback()
 		return
 	}
 
-	// Has next Promise, wrap with panic recovery
 	defer func() {
 		if r := recover(); r != nil {
 			var panicErr error
@@ -382,15 +349,16 @@ func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err 
 				panicErr = errors.New("panic occurred in finally callback")
 			}
 			next.reject(panicErr)
+			return
+		}
+
+		// Finally callback completed successfully, resolve with original value
+		if err == nil {
+			next.resolve(value)
+		} else {
+			next.reject(err)
 		}
 	}()
 
 	callback()
-
-	// After finally callback, resolve/reject based on original state
-	if err != nil {
-		next.reject(err)
-	} else {
-		next.resolve(value)
-	}
 }

@@ -2,11 +2,9 @@ package promise
 
 import "runtime"
 
-// MicrotaskConfig holds basic configuration for the microtask queue
+// MicrotaskConfig holds configuration for the microtask queue
 type MicrotaskConfig struct {
-	// BufferSize is the size of the task buffer
-	BufferSize int
-	// WorkerCount is the number of worker goroutines
+	BufferSize  int
 	WorkerCount int
 }
 
@@ -20,11 +18,10 @@ func DefaultMicrotaskConfig() *MicrotaskConfig {
 
 // microTask represents a microtask in the queue
 type microTask struct {
-	fn   func()
-	done chan struct{}
+	fn func()
 }
 
-// microTaskQueue manages microtasks
+// microTaskQueue manages microtasks with basic control
 type microTaskQueue struct {
 	tasks  chan *microTask
 	config *MicrotaskConfig
@@ -37,7 +34,6 @@ func newMicrotaskQueue(config *MicrotaskConfig) *microTaskQueue {
 		config: config,
 	}
 
-	// Start worker goroutines
 	for i := 0; i < config.WorkerCount; i++ {
 		go queue.worker()
 	}
@@ -48,7 +44,21 @@ func newMicrotaskQueue(config *MicrotaskConfig) *microTaskQueue {
 // worker processes microtasks
 func (q *microTaskQueue) worker() {
 	for task := range q.tasks {
-		task.fn()
-		close(task.done)
+		if task != nil {
+			task.fn()
+		}
+	}
+}
+
+// schedule schedules a microtask with basic control
+func (q *microTaskQueue) schedule(fn func()) {
+	task := &microTask{fn: fn}
+
+	select {
+	case q.tasks <- task:
+		// Successfully queued
+	default:
+		// Queue full, execute directly to avoid deadlock
+		go fn()
 	}
 }
