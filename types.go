@@ -89,46 +89,6 @@ type handler[T any] struct {
 	next        *Promise[any]
 }
 
-// reset resets the handler for reuse
-func (h *handler[T]) reset() {
-	h.onFulfilled = nil
-	h.onRejected = nil
-	h.next = nil
-}
-
-// getHandler gets a handler from the pool or creates a new one
-func getHandler[T any]() *handler[T] {
-	// Use the global handler pool with type erasure
-	if v := globalHandlerPool.Get(); v != nil {
-		h := v.(*handler[any])
-		// Create a new typed handler and copy the fields
-		typedHandler := &handler[T]{}
-		// Reset the original handler and return it to pool
-		h.reset()
-		globalHandlerPool.Put(h)
-		return typedHandler
-	}
-	return &handler[T]{}
-}
-
-// putHandler returns a handler to the pool
-func putHandler[T any](h *handler[T]) {
-	// Convert to interface{} type for the pool
-	interfaceHandler := &handler[any]{
-		onFulfilled: func(value any) any { return nil },
-		onRejected:  func(err error) any { return nil },
-		next:        nil,
-	}
-	globalHandlerPool.Put(interfaceHandler)
-}
-
-// Global handler pool using interface{} to avoid generic type issues
-var globalHandlerPool = sync.Pool{
-	New: func() interface{} {
-		return &handler[any]{}
-	},
-}
-
 // Result represents the result of a Promise
 type Result[T any] struct {
 	Value T
