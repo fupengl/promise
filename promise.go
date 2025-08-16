@@ -68,6 +68,11 @@ func (p *Promise[T]) resolve(value T) {
 				})
 			}
 		}
+
+		// Return handlers to the pool
+		for _, h := range handlers {
+			putHandler(h)
+		}
 	}
 }
 
@@ -108,6 +113,11 @@ func (p *Promise[T]) reject(err error) {
 				})
 			}
 		}
+
+		// Return handlers to the pool
+		for _, h := range handlers {
+			putHandler(h)
+		}
 	}
 }
 
@@ -120,11 +130,10 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 
 	next.state.Store(Pending)
 
-	h := &handler[T]{
-		onFulfilled: onFulfilled,
-		onRejected:  onRejected,
-		next:        next,
-	}
+	h := getHandler[T]()
+	h.onFulfilled = onFulfilled
+	h.onRejected = onRejected
+	h.next = next
 
 	state := p.getState()
 
@@ -157,7 +166,7 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 	p.mu.Lock()
 	if p.getState() == Pending {
 		if p.handlers == nil {
-			p.handlers = make([]*handler[T], 0, 4)
+			p.handlers = make([]*handler[T], 0, 2)
 		}
 		p.handlers = append(p.handlers, h)
 	}
@@ -181,18 +190,17 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	next.state.Store(Pending)
 
 	// Create a handler that will execute the finally callback
-	h := &handler[T]{
-		onFulfilled: func(value T) any {
-			safeFinallyCallback(onFinally, next, value, nil)
-			return nil
-		},
-		onRejected: func(err error) any {
-			value, _ := p.getValue()
-			safeFinallyCallback(onFinally, next, value, err)
-			return nil
-		},
-		next: nil, // We don't need to chain to another promise here
+	h := getHandler[T]()
+	h.onFulfilled = func(value T) any {
+		safeFinallyCallback(onFinally, next, value, nil)
+		return nil
 	}
+	h.onRejected = func(err error) any {
+		value, _ := p.getValue()
+		safeFinallyCallback(onFinally, next, value, err)
+		return nil
+	}
+	h.next = nil // We don't need to chain to another promise here
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -218,7 +226,7 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 		// Promise is still pending, add handler
 		// Lazy initialize handlers slice
 		if p.handlers == nil {
-			p.handlers = make([]*handler[T], 0, 4)
+			p.handlers = make([]*handler[T], 0, 2)
 		}
 		p.handlers = append(p.handlers, h)
 	}
