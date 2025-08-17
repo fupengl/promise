@@ -21,15 +21,39 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 	p.state.Store(Pending)
 	// handlers remain lazy initialized, only created when Then is called
 
+	// Check if manager is shutdown before scheduling
+	if manager.IsShutdown() {
+		// Manager is shutdown, reject the promise immediately
+		p.reject(&PromiseError{
+			Message: "Promise creation failed: manager is shutdown",
+			Cause:   errors.New("manager is shutdown"),
+			Type:    RejectionError,
+		})
+		return p
+	}
+
 	// Execute executor asynchronously using the manager
 	manager.scheduleExecutor(func() {
 		defer func() {
 			if r := recover(); r != nil {
+				var panicErr error
 				if err, ok := r.(error); ok {
-					p.reject(err)
+					// Wrap error panic as PromiseError
+					panicErr = &PromiseError{
+						Message: "panic in executor",
+						Cause:   err,
+						Type:    PanicError,
+					}
 				} else {
-					p.reject(errors.New("panic occurred"))
+					// Wrap non-error panic as PromiseError
+					panicErr = &PromiseError{
+						Message: fmt.Sprintf("panic in executor: %v", r),
+						Cause:   nil,
+						Type:    PanicError,
+						Value:   r, // Preserve original panic value
+					}
 				}
+				p.reject(panicErr)
 			}
 		}()
 

@@ -928,3 +928,97 @@ func TestRetryWithContextImmediateSuccess(t *testing.T) {
 		t.Errorf("Expected 1 attempt, but got: %d", attempts)
 	}
 }
+
+// TestNewWithMgrPanicHandling tests panic handling in NewWithMgr executor
+func TestNewWithMgrPanicHandling(t *testing.T) {
+	t.Run("Error panic in executor", func(t *testing.T) {
+		manager := NewPromiseMgr(1)
+		defer manager.Close()
+
+		promise := NewWithMgr(manager, func(resolve func(string), reject func(error)) {
+			panic(errors.New("custom error panic in executor"))
+		})
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error due to panic, but got none")
+		}
+
+		// Verify it's a PromiseError with PanicError type
+		if promiseErr, ok := err.(*PromiseError); ok {
+			if promiseErr.Type != PanicError {
+				t.Errorf("Expected PanicError type, but got: %v", promiseErr.Type)
+			}
+			if !strings.Contains(promiseErr.Message, "panic in executor") {
+				t.Errorf("Expected error message to contain 'panic in executor', but got: %v", promiseErr.Message)
+			}
+		} else {
+			t.Errorf("Expected PromiseError type, but got: %T", err)
+		}
+	})
+
+	t.Run("Non-error panic in executor", func(t *testing.T) {
+		manager := NewPromiseMgr(1)
+		defer manager.Close()
+
+		promise := NewWithMgr(manager, func(resolve func(string), reject func(error)) {
+			panic("string panic in executor")
+		})
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error due to panic, but got none")
+		}
+
+		// Verify it's a PromiseError with PanicError type
+		if promiseErr, ok := err.(*PromiseError); ok {
+			if promiseErr.Type != PanicError {
+				t.Errorf("Expected PanicError type, but got: %v", promiseErr.Type)
+			}
+			if !strings.Contains(promiseErr.Message, "panic in executor") {
+				t.Errorf("Expected error message to contain 'panic in executor', but got: %v", promiseErr.Message)
+			}
+			if promiseErr.Value != "string panic in executor" {
+				t.Errorf("Expected panic value to be 'string panic in executor', but got: %v", promiseErr.Value)
+			}
+		} else {
+			t.Errorf("Expected PromiseError type, but got: %T", err)
+		}
+	})
+}
+
+// TestPromiseCreationAfterManagerShutdown tests that Promise creation fails gracefully when manager is shutdown
+func TestPromiseCreationAfterManagerShutdown(t *testing.T) {
+	manager := NewPromiseMgr(1)
+
+	// Close the manager first
+	manager.Close()
+
+	// Verify manager is shutdown
+	if !manager.IsShutdown() {
+		t.Error("Expected manager to be shutdown")
+	}
+
+	// Try to create a Promise after manager shutdown
+	promise := NewWithMgr(manager, func(resolve func(string), reject func(error)) {
+		resolve("success")
+	})
+
+	// The promise should be rejected immediately
+	_, err := promise.Await()
+	if err == nil {
+		t.Error("Expected error due to manager shutdown, but got none")
+	}
+
+	// Verify it's a PromiseError with correct message
+	if promiseErr, ok := err.(*PromiseError); ok {
+		if promiseErr.Type != RejectionError {
+			t.Errorf("Expected RejectionError type, but got: %v", promiseErr.Type)
+		}
+		if !strings.Contains(promiseErr.Message, "manager is shutdown") {
+			t.Errorf("Expected error message to contain 'manager is shutdown', but got: %v", promiseErr.Message)
+		}
+	} else {
+		t.Errorf("Expected PromiseError type, but got: %T", err)
+	}
+}
