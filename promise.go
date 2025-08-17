@@ -11,6 +11,36 @@ func New[T any](executor func(resolve func(T), reject func(error))) *Promise[T] 
 	return NewWithMgr(GetDefaultMgr(), executor)
 }
 
+// WithResolvers creates a Promise and returns resolve/reject functions for external control
+// Similar to JavaScript's Promise.withResolvers()
+func WithResolvers[T any]() (*Promise[T], func(T), func(error)) {
+	return WithResolversWithMgr[T](GetDefaultMgr())
+}
+
+// WithResolversWithMgr creates a Promise with specified manager and returns resolve/reject functions
+func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), func(error)) {
+	p := &Promise[T]{
+		manager: manager,
+	}
+
+	// Initialize atomic values
+	p.state.Store(Pending)
+
+	// Check if manager is shutdown
+	if manager.IsShutdown() {
+		// Manager is shutdown, reject the promise immediately
+		p.reject(&PromiseError{
+			Message: "Promise creation failed: manager is shutdown",
+			Cause:   errors.New("manager is shutdown"),
+			Type:    RejectionError,
+		})
+		return p, p.resolve, p.reject
+	}
+
+	// Return the promise and control functions
+	return p, p.resolve, p.reject
+}
+
 // NewWithManager creates a new Promise using the specified manager
 func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), reject func(error))) *Promise[T] {
 	p := &Promise[T]{
@@ -75,7 +105,16 @@ func (p *Promise[T]) resolve(value T) {
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
-	close(p.done)
+	// Check if channel is already closed to prevent panic
+	select {
+	case <-p.done:
+		// Channel already closed, do nothing
+		p.mu.Unlock()
+		return
+	default:
+		// Channel not closed, safe to close
+		close(p.done)
+	}
 
 	handlers := p.handlers
 	p.handlers = nil
@@ -131,7 +170,16 @@ func (p *Promise[T]) reject(err error) {
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
-	close(p.done)
+	// Check if channel is already closed to prevent panic
+	select {
+	case <-p.done:
+		// Channel already closed, do nothing
+		p.mu.Unlock()
+		return
+	default:
+		// Channel not closed, safe to close
+		close(p.done)
+	}
 
 	handlers := p.handlers
 	p.handlers = nil

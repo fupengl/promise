@@ -1022,3 +1022,128 @@ func TestPromiseCreationAfterManagerShutdown(t *testing.T) {
 		t.Errorf("Expected PromiseError type, but got: %T", err)
 	}
 }
+
+// TestWithResolvers tests the WithResolvers function
+func TestWithResolvers(t *testing.T) {
+	t.Run("Resolve from external", func(t *testing.T) {
+		promise, resolve, _ := WithResolvers[string]()
+
+		// Resolve from external code
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			resolve("external resolve")
+		}()
+
+		result, err := promise.Await()
+		if err != nil {
+			t.Errorf("Expected no error, but got: %v", err)
+		}
+		if result != "external resolve" {
+			t.Errorf("Expected 'external resolve', but got: %v", result)
+		}
+	})
+
+	t.Run("Reject from external", func(t *testing.T) {
+		promise, _, reject := WithResolvers[string]()
+
+		// Reject from external code
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			reject(errors.New("external reject"))
+		}()
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error, but got none")
+		}
+		if !strings.Contains(err.Error(), "external reject") {
+			t.Errorf("Expected error to contain 'external reject', but got: %v", err)
+		}
+	})
+
+	t.Run("Multiple resolves should only take first", func(t *testing.T) {
+		promise, resolve, _ := WithResolvers[string]()
+
+		// Multiple resolves
+		go func() {
+			time.Sleep(5 * time.Millisecond)
+			resolve("first")
+		}()
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			resolve("second")
+		}()
+
+		result, err := promise.Await()
+		if err != nil {
+			t.Errorf("Expected no error, but got: %v", err)
+		}
+		if result != "first" {
+			t.Errorf("Expected 'first', but got: %v", result)
+		}
+	})
+
+	t.Run("Multiple rejects should only take first", func(t *testing.T) {
+		promise, _, reject := WithResolvers[string]()
+
+		// Multiple rejects
+		go func() {
+			time.Sleep(5 * time.Millisecond)
+			reject(errors.New("first reject"))
+		}()
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			reject(errors.New("second reject"))
+		}()
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error, but got none")
+		}
+		if !strings.Contains(err.Error(), "first reject") {
+			t.Errorf("Expected error to contain 'first reject', but got: %v", err)
+		}
+	})
+}
+
+// TestWithResolversWithMgr tests the WithResolversWithMgr function
+func TestWithResolversWithMgr(t *testing.T) {
+	t.Run("With custom manager", func(t *testing.T) {
+		manager := NewPromiseMgr(1)
+		defer manager.Close()
+
+		promise, resolve, _ := WithResolversWithMgr[string](manager)
+
+		// Resolve from external code
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			resolve("custom manager resolve")
+		}()
+
+		result, err := promise.Await()
+		if err != nil {
+			t.Errorf("Expected no error, but got: %v", err)
+		}
+		if result != "custom manager resolve" {
+			t.Errorf("Expected 'custom manager resolve', but got: %v", result)
+		}
+	})
+
+	t.Run("With shutdown manager", func(t *testing.T) {
+		manager := NewPromiseMgr(1)
+		manager.Close()
+
+		promise, resolve, _ := WithResolversWithMgr[string](manager)
+
+		// Try to resolve after manager shutdown
+		resolve("should not work")
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error due to manager shutdown, but got none")
+		}
+		if !strings.Contains(err.Error(), "manager is shutdown") {
+			t.Errorf("Expected error to contain 'manager is shutdown', but got: %v", err)
+		}
+	})
+}

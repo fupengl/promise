@@ -2,6 +2,7 @@ package promise
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -116,5 +117,58 @@ func BenchmarkSimplePromiseChain(b *testing.B) {
 		defer cancel()
 
 		_, _ = currentPromise.AwaitWithContext(ctx)
+	}
+}
+
+// BenchmarkWithResolvers measures the performance of WithResolvers function
+func BenchmarkWithResolvers(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		promise, resolve, _ := WithResolvers[string]()
+		resolve("test")
+		_, _ = promise.Await()
+	}
+}
+
+// BenchmarkWithResolversWithMgr measures the performance of WithResolversWithMgr function
+func BenchmarkWithResolversWithMgr(b *testing.B) {
+	manager := NewPromiseMgr(4)
+	defer manager.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		promise, resolve, _ := WithResolversWithMgr[string](manager)
+		resolve("test")
+		_, _ = promise.Await()
+	}
+}
+
+// BenchmarkResolveMultipleTimes measures the performance impact of multiple resolve calls
+func BenchmarkResolveMultipleTimes(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		promise, resolve, _ := WithResolvers[string]()
+
+		// Call resolve multiple times to test the channel check overhead
+		resolve("first")
+		resolve("second") // This should be ignored
+		resolve("third")  // This should be ignored
+
+		_, _ = promise.Await()
+	}
+}
+
+// BenchmarkRejectMultipleTimes measures the performance impact of multiple reject calls
+func BenchmarkRejectMultipleTimes(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		promise, _, reject := WithResolvers[string]()
+
+		// Call reject multiple times to test the channel check overhead
+		reject(errors.New("first"))
+		reject(errors.New("second")) // This should be ignored
+		reject(errors.New("third"))  // This should be ignored
+
+		_, _ = promise.Await()
 	}
 }

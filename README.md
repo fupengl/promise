@@ -81,6 +81,23 @@ results, _ := promise.All(promises...).Await()
 fmt.Printf("All completed: %v\n", results)
 ```
 
+### External Control with WithResolvers
+
+```go
+// Create Promise with external control (fastest method)
+promise, resolve, reject := promise.WithResolvers[string]()
+
+// Control Promise state from external code
+go func() {
+    time.Sleep(100 * time.Millisecond)
+    resolve("Hello from external control!")
+}()
+
+// Wait for result
+result, _ := promise.Await()
+fmt.Println(result) // Output: Hello from external control!
+```
+
 ## 📚 Core API
 
 ### Constructors
@@ -94,6 +111,12 @@ func Resolve[T any](value T) *Promise[T]
 
 // Create rejected Promise
 func Reject[T any](err error) *Promise[T]
+
+// Create Promise with external control (fastest method)
+func WithResolvers[T any]() (*Promise[T], func(T), func(error))
+
+// Create Promise with custom manager and external control
+func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), func(error))
 ```
 
 ### Instance Methods
@@ -160,31 +183,38 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 ### Benchmark Results
 
 ```
-BenchmarkPromiseCreation-12              2100846               559.3 ns/op           448 B/op          8 allocs/op
-BenchmarkPromiseThen-12                  3609886               342.6 ns/op           336 B/op          7 allocs/op
-BenchmarkPromiseAwait-12                90184309                14.07 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12               9050398               130.2 ns/op            24 B/op          2 allocs/op
-BenchmarkPromiseChain-12                  152283             14239 ns/op            4227 B/op         72 allocs/op
-BenchmarkSimplePromiseChain-12            208448              6225 ns/op            2551 B/op         42 allocs/op
+BenchmarkPromiseCreation-12              1978914               618.2 ns/op           448 B/op          8 allocs/op
+BenchmarkPromiseThen-12                  3443774               359.6 ns/op           336 B/op          7 allocs/op
+BenchmarkPromiseAwait-12                89638920                12.91 ns/op            0 B/op          0 allocs/op
+BenchmarkMicrotaskQueue-12               8970466               134.7 ns/op            24 B/op          2 allocs/op
+BenchmarkPromiseChain-12                  170878             10079 ns/op            4066 B/op         72 allocs/op
+BenchmarkSimplePromiseChain-12            381231              6209 ns/op            2472 B/op         42 allocs/op
+BenchmarkWithResolvers-12                6140624               195.3 ns/op           288 B/op          5 allocs/op
+BenchmarkWithResolversWithMgr-12         6223452               191.9 ns/op           288 B/op          5 allocs/op
+BenchmarkResolveMultipleTimes-12         4420789               272.0 ns/op           320 B/op          7 allocs/op
+BenchmarkRejectMultipleTimes-12          3111844               383.4 ns/op           560 B/op         10 allocs/op
 ```
 
 ### Performance Analysis
 
 | Operation | Performance | Memory Allocation | Description |
 |-----------|-------------|-------------------|-------------|
-| **Promise Creation** | 559.3 ns/op | 448 B/op | Basic Promise instance creation |
-| **Then Operation** | 342.6 ns/op | 336 B/op | Adding Then callback |
-| **Promise Await** | 14.07 ns/op | 0 B/op | Promise await completion |
-| **Microtask Scheduling** | 130.2 ns/op | 24 B/op | Microtask queue scheduling |
-| **Long Promise Chain (10)** | 14,239 ns/op | 4,227 B/op | 10-level Promise chaining |
-| **Simple Promise Chain (5)** | 6,225 ns/op | 2,551 B/op | 5-level Promise chaining |
+| **Promise Creation** | 618.2 ns/op | 448 B/op | Basic Promise instance creation |
+| **Then Operation** | 359.6 ns/op | 336 B/op | Adding Then callback |
+| **Promise Await** | 12.91 ns/op | 0 B/op | Promise await completion |
+| **Microtask Scheduling** | 134.7 ns/op | 24 B/op | Microtask queue scheduling |
+| **Long Promise Chain (10)** | 10,079 ns/op | 4,066 B/op | 10-level Promise chaining |
+| **Simple Promise Chain (5)** | 6,209 ns/op | 2,472 B/op | 5-level Promise chaining |
+| **WithResolvers** | 195.3 ns/op | 288 B/op | **Fastest Promise creation method** |
+| **WithResolversWithMgr** | 191.9 ns/op | 288 B/op | **Fastest with custom manager** |
 
 ### Performance Highlights
 
-- ⭐ **Excellent Promise Await Performance**: Only 14.07 nanoseconds, can handle 90 million operations per second
-- ⭐ **Efficient Microtask Scheduling**: 130.2 nanoseconds scheduling time, suitable for high-frequency async operations
-- ⭐ **Reasonable Memory Allocation**: Each Promise is about 448 bytes, controllable memory overhead
-- ⭐ **Smooth Chaining Operations**: Each Then operation only takes 342.6 nanoseconds
+- ⭐ **Excellent Promise Await Performance**: Only 12.91 nanoseconds, can handle 77 million operations per second
+- ⭐ **Fastest Promise Creation**: WithResolvers achieves 195.3 ns/op, **3.2x faster** than traditional creation
+- ⭐ **Efficient Microtask Scheduling**: 134.7 nanoseconds scheduling time, suitable for high-frequency async operations
+- ⭐ **Optimized Memory Usage**: WithResolvers uses only 288 B/op, **35.7% less memory** than traditional creation
+- ⭐ **Smooth Chaining Operations**: Each Then operation only takes 359.6 nanoseconds
 
 ## 🧪 Testing
 

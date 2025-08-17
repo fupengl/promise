@@ -110,6 +110,23 @@ results, _ := promise.All(promises...).Await()
 fmt.Printf("All completed: %v\n", results)
 ```
 
+### 使用 WithResolvers 进行外部控制
+
+```go
+// 创建可外部控制的Promise（最快方法）
+promise, resolve, reject := promise.WithResolvers[string]()
+
+// 从外部代码控制Promise状态
+go func() {
+    time.Sleep(100 * time.Millisecond)
+    resolve("来自外部控制的问候！")
+}()
+
+// 等待结果
+result, _ := promise.Await()
+fmt.Println(result) // 输出: 来自外部控制的问候！
+```
+
 ## 📚 核心API
 
 ### 构造函数
@@ -126,6 +143,12 @@ func Resolve[T any](value T) *Promise[T]
 
 // 创建已拒绝的Promise
 func Reject[T any](err error) *Promise[T]
+
+// 创建可外部控制的Promise（最快方法）
+func WithResolvers[T any]() (*Promise[T], func(T), func(error))
+
+// 使用自定义管理器创建可外部控制的Promise
+func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), func(error))
 ```
 
 ### 实例方法
@@ -208,31 +231,38 @@ func NewPromiseMgrWithConfig(workers int, microtaskConfig *MicrotaskConfig) *Pro
 ### 基准测试结果
 
 ```
-BenchmarkPromiseCreation-12              2100846               559.3 ns/op           448 B/op          8 allocs/op
-BenchmarkPromiseThen-12                  3609886               342.6 ns/op           336 B/op          7 allocs/op
-BenchmarkPromiseAwait-12                90184309                14.07 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12               9050398               130.2 ns/op            24 B/op          2 allocs/op
-BenchmarkPromiseChain-12                  152283             14239 ns/op            4227 B/op         72 allocs/op
-BenchmarkSimplePromiseChain-12            208448              6225 ns/op            2551 B/op         42 allocs/op
+BenchmarkPromiseCreation-12              1978914               618.2 ns/op           448 B/op          8 allocs/op
+BenchmarkPromiseThen-12                  3443774               359.6 ns/op           336 B/op          7 allocs/op
+BenchmarkPromiseAwait-12                89638920                12.91 ns/op            0 B/op          0 allocs/op
+BenchmarkMicrotaskQueue-12               8970466               134.7 ns/op            24 B/op          2 allocs/op
+BenchmarkPromiseChain-12                  170878             10079 ns/op            4066 B/op         72 allocs/op
+BenchmarkSimplePromiseChain-12            381231              6209 ns/op            2472 B/op         42 allocs/op
+BenchmarkWithResolvers-12                6140624               195.3 ns/op           288 B/op          5 allocs/op
+BenchmarkWithResolversWithMgr-12         6223452               191.9 ns/op           288 B/op          5 allocs/op
+BenchmarkResolveMultipleTimes-12         4420789               272.0 ns/op           320 B/op          7 allocs/op
+BenchmarkRejectMultipleTimes-12          3111844               383.4 ns/op           560 B/op         10 allocs/op
 ```
 
 ### 性能分析
 
 | 操作 | 性能 | 内存分配 | 说明 |
 |------|------|----------|------|
-| **Promise创建** | 559.3 ns/op | 448 B/op | 基础Promise实例创建 |
-| **Then操作** | 342.6 ns/op | 336 B/op | 添加Then回调 |
-| **Promise等待** | 14.07 ns/op | 0 B/op | Promise等待完成 |
-| **微任务调度** | 130.2 ns/op | 24 B/op | 微任务队列调度 |
-| **长Promise链(10个)** | 14,239 ns/op | 4,227 B/op | 10级Promise链式调用 |
-| **简单Promise链(5个)** | 6,225 ns/op | 2,551 B/op | 5级Promise链式调用 |
+| **Promise创建** | 618.2 ns/op | 448 B/op | 基础Promise实例创建 |
+| **Then操作** | 359.6 ns/op | 336 B/op | 添加Then回调 |
+| **Promise等待** | 12.91 ns/op | 0 B/op | Promise等待完成 |
+| **微任务调度** | 134.7 ns/op | 24 B/op | 微任务队列调度 |
+| **长Promise链(10个)** | 10,079 ns/op | 4,066 B/op | 10级Promise链式调用 |
+| **简单Promise链(5个)** | 6,209 ns/op | 2,472 B/op | 5级Promise链式调用 |
+| **WithResolvers** | 195.3 ns/op | 288 B/op | **最快的Promise创建方法** |
+| **WithResolversWithMgr** | 191.9 ns/op | 288 B/op | **使用自定义管理器的最快方法** |
 
 ### 性能亮点
 
-- ⭐ **Promise等待性能极佳**: 仅需14.07纳秒，每秒可处理9000万次
-- ⭐ **微任务调度高效**: 130.2纳秒的调度时间，适合高频异步操作
-- ⭐ **内存分配合理**: 每个Promise约448字节，内存开销可控
-- ⭐ **链式操作流畅**: 每个Then操作仅需342.6纳秒
+- ⭐ **Promise等待性能极佳**: 仅需12.91纳秒，每秒可处理7700万次
+- ⭐ **最快的Promise创建**: WithResolvers达到195.3 ns/op，**比传统创建快3.2倍**
+- ⭐ **微任务调度高效**: 134.7纳秒的调度时间，适合高频异步操作
+- ⭐ **优化的内存使用**: WithResolvers仅使用288 B/op，**比传统创建节省35.7%内存**
+- ⭐ **链式操作流畅**: 每个Then操作仅需359.6纳秒
 
 
 

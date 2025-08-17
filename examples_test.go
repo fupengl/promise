@@ -299,3 +299,43 @@ func ExampleGetDefaultMgr() {
 	fmt.Printf("New buffer size: %d\n", config.BufferSize)
 	fmt.Printf("New worker count: %d\n", config.WorkerCount)
 }
+
+// ExampleWithResolvers demonstrates the WithResolvers function
+func ExampleWithResolvers() {
+	// Create a Promise with external control
+	promise, resolve, _ := WithResolvers[string]()
+
+	// Simulate async operation in a goroutine
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		// Resolve the promise from external code
+		resolve("Hello from WithResolvers!")
+	}()
+
+	// Wait for result
+	result, _ := promise.Await()
+	fmt.Println(result)
+	// Output: Hello from WithResolvers!
+}
+
+// ExampleWithResolversWithMgr demonstrates the WithResolversWithMgr function
+func ExampleWithResolversWithMgr() {
+	// Create custom manager
+	manager := NewPromiseMgr(2)
+	defer manager.Close()
+
+	// Create a Promise with external control using custom manager
+	promise, resolve, _ := WithResolversWithMgr[string](manager)
+
+	// Simulate async operation
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		// Resolve the promise from external code
+		resolve("Hello from custom manager!")
+	}()
+
+	// Wait for result
+	result, _ := promise.Await()
+	fmt.Println(result)
+	// Output: Hello from custom manager!
+}
