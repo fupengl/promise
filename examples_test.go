@@ -53,7 +53,7 @@ func ExamplePromise_Catch() {
 	}).Await()
 
 	fmt.Println(result)
-	// Output: error handled: something went wrong
+	// Output: error handled: Promise rejected: something went wrong
 }
 
 func ExamplePromise_Finally() {
@@ -115,6 +115,30 @@ func ExampleRetry() {
 	result, _ := Retry(fn, 3, 10*time.Millisecond).Await()
 	fmt.Printf("Result: %s (attempts: %d)\n", result, attempts)
 	// Output: Result: success (attempts: 3)
+}
+
+// ExampleRetryWithContext demonstrates retry with context cancellation
+func ExampleRetryWithContext() {
+	attempts := 0
+	fn := func() (string, error) {
+		attempts++
+		// Always fail to ensure timeout occurs
+		return "", errors.New("always fails")
+	}
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Start retry operation
+	result, err := RetryWithContext(ctx, fn, 5, 20*time.Millisecond).Await()
+
+	if err != nil {
+		fmt.Printf("Retry failed: %v\n", err)
+	} else {
+		fmt.Printf("Result: %s (attempts: %d)\n", result, attempts)
+	}
+	// Output: Retry failed: Retry cancelled during delay: context deadline exceeded
 }
 
 func ExamplePromise_State() {

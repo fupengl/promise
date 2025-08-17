@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -183,8 +184,17 @@ func TestPromiseTimeout(t *testing.T) {
 	}
 
 	// Verify it's a timeout error
-	if err.Error() != "promise timeout" {
-		t.Errorf("Expected timeout error, but got: %v", err)
+	if !strings.Contains(err.Error(), "Promise timeout") {
+		t.Errorf("Expected timeout error message to contain 'Promise timeout', but got: %v", err)
+	}
+
+	// Verify it's a PromiseError with TimeoutError type
+	if promiseErr, ok := err.(*PromiseError); ok {
+		if promiseErr.Type != TimeoutError {
+			t.Errorf("Expected TimeoutError type, but got: %v", promiseErr.Type)
+		}
+	} else {
+		t.Errorf("Expected PromiseError type, but got: %T", err)
 	}
 }
 
@@ -365,8 +375,9 @@ func TestPromiseThenRejected(t *testing.T) {
 		t.Error("onRejected should be called for rejected Promise")
 	}
 
-	if result != "error handled: test error" {
-		t.Errorf("Expected 'error handled: test error', but got: '%v'", result)
+	expected := "error handled: Promise rejected: test error"
+	if result != expected {
+		t.Errorf("Expected '%s', but got: '%v'", expected, result)
 	}
 }
 
@@ -647,5 +658,273 @@ func TestResetDefaultManager(t *testing.T) {
 	}
 	if config.WorkerCount != 3 {
 		t.Errorf("Expected WorkerCount 3, got %d", config.WorkerCount)
+	}
+}
+
+// TestMicrotaskPanicHandling tests panic handling in microtask callbacks
+func TestMicrotaskPanicHandling(t *testing.T) {
+	t.Run("Panic in Then callback", func(t *testing.T) {
+		promise := New(func(resolve func(string), reject func(error)) {
+			resolve("success")
+		})
+
+		// Add a Then callback that will panic
+		nextPromise := promise.Then(func(value string) any {
+			panic("intentional panic in Then callback")
+		}, nil)
+
+		// The next promise should be rejected due to panic
+		_, err := nextPromise.Await()
+		if err == nil {
+			t.Error("Expected error due to panic, but got none")
+		}
+		if !strings.Contains(err.Error(), "panic in fulfilled callback") {
+			t.Errorf("Expected panic error message to contain 'panic in fulfilled callback', but got: %v", err)
+		}
+	})
+
+	t.Run("Panic in Catch callback", func(t *testing.T) {
+		promise := New(func(resolve func(string), reject func(error)) {
+			reject(errors.New("original error"))
+		})
+
+		// Add a Catch callback that will panic
+		nextPromise := promise.Catch(func(err error) any {
+			panic("intentional panic in Catch callback")
+		})
+
+		// The next promise should be rejected due to panic
+		_, err := nextPromise.Await()
+		if err == nil {
+			t.Error("Expected error due to panic, but got none")
+		}
+		if !strings.Contains(err.Error(), "panic in error callback") {
+			t.Errorf("Expected panic error message to contain 'panic in error callback', but got: %v", err)
+		}
+	})
+
+	t.Run("Panic in Finally callback", func(t *testing.T) {
+		promise := New(func(resolve func(string), reject func(error)) {
+			resolve("success")
+		})
+
+		// Add a Finally callback that will panic
+		nextPromise := promise.Finally(func() {
+			panic("intentional panic in Finally callback")
+		})
+
+		// The next promise should be rejected due to panic
+		_, err := nextPromise.Await()
+		if err == nil {
+			t.Error("Expected error due to panic, but got none")
+		}
+		if !strings.Contains(err.Error(), "panic in finally callback") {
+			t.Errorf("Expected panic error message to contain 'panic in finally callback', but got: %v", err)
+		}
+	})
+
+	t.Run("Error panic in callback", func(t *testing.T) {
+		promise := New(func(resolve func(string), reject func(error)) {
+			resolve("success")
+		})
+
+		// Add a Then callback that will panic with an error
+		nextPromise := promise.Then(func(value string) any {
+			panic(errors.New("custom error panic"))
+		}, nil)
+
+		// The next promise should be rejected with the custom error
+		_, err := nextPromise.Await()
+		if err == nil {
+			t.Error("Expected error due to panic, but got none")
+		}
+		if !strings.Contains(err.Error(), "custom error panic") {
+			t.Errorf("Expected panic error message to contain 'custom error panic', but got: %v", err)
+		}
+	})
+}
+
+// TestRetryWithContextCancellation tests the cancellation functionality of RetryWithContext
+func TestRetryWithContextCancellation(t *testing.T) {
+	tests := []struct {
+		name           string
+		cancelDelay    time.Duration
+		expectedError  string
+		expectedType   ErrorType
+		shouldComplete bool
+	}{
+		{
+			name:           "Cancel before first attempt",
+			cancelDelay:    0,
+			expectedError:  "Retry cancelled",
+			expectedType:   RejectionError,
+			shouldComplete: false,
+		},
+		{
+			name:           "Cancel during delay",
+			cancelDelay:    50 * time.Millisecond,
+			expectedError:  "Retry cancelled during delay",
+			expectedType:   RejectionError,
+			shouldComplete: false,
+		},
+		{
+			name:           "Complete without cancellation",
+			cancelDelay:    0, // Don't cancel, let it complete
+			expectedError:  "",
+			expectedType:   0,
+			shouldComplete: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attempts := 0
+			fn := func() (string, error) {
+				attempts++
+				if attempts < 3 {
+					return "", errors.New("temporary failure")
+				}
+				return "success", nil
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Start retry operation
+			retryPromise := RetryWithContext(ctx, fn, 3, 100*time.Millisecond)
+
+			// Cancel after specified delay
+			if tt.cancelDelay > 0 {
+				time.AfterFunc(tt.cancelDelay, cancel)
+			} else if tt.cancelDelay == 0 && !tt.shouldComplete {
+				cancel() // Cancel immediately for cancellation tests
+			}
+			// For shouldComplete=true, don't cancel
+
+			// Wait for result
+			result, err := retryPromise.Await()
+
+			if tt.shouldComplete {
+				// Should complete successfully
+				if err != nil {
+					t.Errorf("Expected no error, but got: %v", err)
+				}
+				if result != "success" {
+					t.Errorf("Expected result 'success', but got: %s", result)
+				}
+			} else {
+				// Should be cancelled
+				if err == nil {
+					t.Error("Expected cancellation error, but got none")
+					return
+				}
+
+				// Check error type and message
+				if promiseErr, ok := err.(*PromiseError); ok {
+					if promiseErr.Type != tt.expectedType {
+						t.Errorf("Expected error type: %v, but got: %v", tt.expectedType, promiseErr.Type)
+					}
+
+					if !strings.Contains(promiseErr.Message, tt.expectedError) {
+						t.Errorf("Expected error message to contain: %s, but got: %s", tt.expectedError, promiseErr.Message)
+					}
+
+					if promiseErr.Cause == nil {
+						t.Error("Expected cause error, but got nil")
+					} else if !strings.Contains(promiseErr.Cause.Error(), "context canceled") {
+						t.Errorf("Expected cause to be context canceled, but got: %v", promiseErr.Cause)
+					}
+				} else {
+					t.Errorf("Expected PromiseError type, but got: %T", err)
+				}
+			}
+		})
+	}
+}
+
+// TestRetryWithContextTimeout tests timeout-based cancellation
+func TestRetryWithContextTimeout(t *testing.T) {
+	attempts := 0
+	fn := func() (string, error) {
+		attempts++
+		if attempts < 5 {
+			return "", errors.New("temporary failure")
+		}
+		return "success", nil
+	}
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	// Start retry operation with long delay
+	retryPromise := RetryWithContext(ctx, fn, 5, 100*time.Millisecond)
+
+	// Wait for result
+	_, err := retryPromise.Await()
+
+	// Should timeout before completion
+	if err == nil {
+		t.Error("Expected timeout error, but got none")
+		return
+	}
+
+	// Check error details
+	if promiseErr, ok := err.(*PromiseError); ok {
+		if promiseErr.Type != RejectionError {
+			t.Errorf("Expected error type: %v, but got: %v", RejectionError, promiseErr.Type)
+		}
+
+		if !strings.Contains(promiseErr.Message, "Retry cancelled") {
+			t.Errorf("Expected error message to contain 'Retry cancelled', but got: %s", promiseErr.Message)
+		}
+
+		if promiseErr.Cause == nil {
+			t.Error("Expected cause error, but got nil")
+		} else if !strings.Contains(promiseErr.Cause.Error(), "deadline exceeded") {
+			t.Errorf("Expected cause to be deadline exceeded, but got: %v", promiseErr.Cause)
+		}
+	} else {
+		t.Errorf("Expected PromiseError type, but got: %T", err)
+	}
+
+	// Should not complete all attempts due to timeout
+	if attempts >= 5 {
+		t.Errorf("Expected less than 5 attempts due to timeout, but got: %d", attempts)
+	}
+}
+
+// TestRetryWithContextImmediateSuccess tests successful completion without cancellation
+func TestRetryWithContextImmediateSuccess(t *testing.T) {
+	attempts := 0
+	fn := func() (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "success on first try", nil
+		}
+		return "", errors.New("should not reach here")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start retry operation
+	retryPromise := RetryWithContext(ctx, fn, 3, 100*time.Millisecond)
+
+	// Wait for result
+	result, err := retryPromise.Await()
+
+	// Should complete successfully
+	if err != nil {
+		t.Errorf("Expected no error, but got: %v", err)
+	}
+
+	if result != "success on first try" {
+		t.Errorf("Expected result 'success on first try', but got: %s", result)
+	}
+
+	// Should only attempt once
+	if attempts != 1 {
+		t.Errorf("Expected 1 attempt, but got: %d", attempts)
 	}
 }

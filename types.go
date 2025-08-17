@@ -1,6 +1,7 @@
 package promise
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -13,6 +14,71 @@ const (
 	Fulfilled
 	Rejected
 )
+
+// Error type enumeration for Promise errors
+type ErrorType int
+
+const (
+	RejectionError ErrorType = iota // Promise rejected
+	PanicError                      // Panic occurred in callback
+	TimeoutError                    // Promise timeout
+)
+
+// PromiseError provides rich error information for Promise operations
+type PromiseError struct {
+	Message       string      // Human-readable error message
+	Cause         error       // Original error that caused this
+	Type          ErrorType   // Type of error
+	Value         interface{} // Original panic value (for non-error panics)
+	OriginalError error       // Original error being processed (for error callbacks)
+}
+
+// Error implements the error interface
+func (e *PromiseError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
+	}
+	if e.Value != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Value)
+	}
+	return e.Message
+}
+
+// Unwrap returns the cause error for error wrapping
+func (e *PromiseError) Unwrap() error {
+	return e.Cause
+}
+
+// Is implements error comparison
+func (e *PromiseError) Is(target error) bool {
+	if target == nil {
+		return e == nil
+	}
+
+	if promiseErr, ok := target.(*PromiseError); ok {
+		return e.Type == promiseErr.Type
+	}
+
+	return false
+}
+
+// As implements error type assertion
+func (e *PromiseError) As(target interface{}) bool {
+	if target == nil {
+		return false
+	}
+
+	switch t := target.(type) {
+	case **PromiseError:
+		*t = e
+		return true
+	case *ErrorType:
+		*t = e.Type
+		return true
+	}
+
+	return false
+}
 
 // Promise structure
 type Promise[T any] struct {

@@ -3,6 +3,7 @@ package promise
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // New creates a new Promise using the default manager
@@ -77,7 +78,30 @@ func (p *Promise[T]) reject(err error) {
 		return
 	}
 
-	p.setError(err)
+	// Wrap error to preserve context
+	var wrappedErr error
+	if err != nil {
+		if _, ok := err.(*PromiseError); ok {
+			// Already PromiseError, use directly
+			wrappedErr = err
+		} else {
+			// Wrap as PromiseError, preserve original error
+			wrappedErr = &PromiseError{
+				Message: "Promise rejected",
+				Cause:   err,
+				Type:    RejectionError,
+			}
+		}
+	} else {
+		// Nil error, create default error
+		wrappedErr = &PromiseError{
+			Message: "Promise rejected with nil error",
+			Cause:   nil,
+			Type:    RejectionError,
+		}
+	}
+
+	p.setError(wrappedErr)
 
 	p.mu.Lock()
 	if p.done == nil {
@@ -94,14 +118,14 @@ func (p *Promise[T]) reject(err error) {
 			if h.onRejected != nil {
 				handler := h.onRejected
 				next := h.next
-				errVal := err
+				errVal := wrappedErr
 
 				p.manager.scheduleMicrotask(func() {
 					safeErrorCallback(handler, errVal, next)
 				})
 			} else if h.next != nil {
 				next := h.next
-				errVal := err
+				errVal := wrappedErr
 
 				p.manager.scheduleMicrotask(func() {
 					next.reject(errVal)
@@ -191,7 +215,7 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 			safeFinallyCallback(onFinally, next, value, err)
 			return nil
 		},
-		next: nil, // We don't need to chain to another promise here
+		next: nil, // No need to chain to another promise
 	}
 
 	p.mu.Lock()
@@ -298,9 +322,20 @@ func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 		if r := recover(); r != nil {
 			var err error
 			if e, ok := r.(error); ok {
-				err = e
+				// Wrap original error, preserve context
+				err = &PromiseError{
+					Message: "panic in fulfilled callback",
+					Cause:   e,
+					Type:    PanicError,
+				}
 			} else {
-				err = errors.New("panic occurred in callback")
+				// Non-error panic, wrap as error but preserve original value
+				err = &PromiseError{
+					Message: fmt.Sprintf("panic in fulfilled callback: %v", r),
+					Cause:   nil,
+					Type:    PanicError,
+					Value:   r,
+				}
 			}
 			next.reject(err)
 		}
@@ -321,9 +356,22 @@ func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) 
 		if r := recover(); r != nil {
 			var panicErr error
 			if e, ok := r.(error); ok {
-				panicErr = e
+				// Wrap original error, preserve context
+				panicErr = &PromiseError{
+					Message:       "panic in error callback",
+					Cause:         e,
+					Type:          PanicError,
+					OriginalError: err, // Preserve original error being processed
+				}
 			} else {
-				panicErr = errors.New("panic occurred in error callback")
+				// Non-error panic, wrap as error but preserve original value
+				panicErr = &PromiseError{
+					Message:       fmt.Sprintf("panic in error callback: %v", r),
+					Cause:         nil,
+					Type:          PanicError,
+					Value:         r,
+					OriginalError: err, // Preserve original error being processed
+				}
 			}
 			next.reject(panicErr)
 		}
@@ -344,9 +392,22 @@ func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err 
 		if r := recover(); r != nil {
 			var panicErr error
 			if e, ok := r.(error); ok {
-				panicErr = e
+				// Wrap original error, preserve context
+				panicErr = &PromiseError{
+					Message:       "panic in finally callback",
+					Cause:         e,
+					Type:          PanicError,
+					OriginalError: err, // Preserve original error (if any)
+				}
 			} else {
-				panicErr = errors.New("panic occurred in finally callback")
+				// Non-error panic, wrap as error but preserve original value
+				panicErr = &PromiseError{
+					Message:       fmt.Sprintf("panic in finally callback: %v", r),
+					Cause:         nil,
+					Type:          PanicError,
+					Value:         r,
+					OriginalError: err, // Preserve original error (if any)
+				}
 			}
 			next.reject(panicErr)
 			return

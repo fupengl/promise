@@ -2,6 +2,7 @@ package promise
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 )
 
@@ -14,24 +15,31 @@ func All[T any](promises ...*Promise[T]) *Promise[[]T] {
 		}
 
 		results := make([]T, len(promises))
-		completed := 0
-		hasError := false
+		var completed int32
+		var hasError int32
+		var mu sync.Mutex
 
 		for i, p := range promises {
 			go func(index int, promise *Promise[T]) {
 				value, err := promise.Await()
 				if err != nil {
-					if !hasError {
-						hasError = true
+					// Use atomic operation to ensure only one goroutine can reject
+					if atomic.CompareAndSwapInt32(&hasError, 0, 1) {
 						reject(err)
 					}
 					return
 				}
 
+				// Use mutex to protect results array access
+				mu.Lock()
 				results[index] = value
-				completed++
+				mu.Unlock()
 
-				if completed == len(promises) && !hasError {
+				// Increment completed counter atomically
+				newCompleted := atomic.AddInt32(&completed, 1)
+
+				// Check if all promises completed and no errors occurred
+				if newCompleted == int32(len(promises)) && atomic.LoadInt32(&hasError) == 0 {
 					resolve(results)
 				}
 			}(i, p)
@@ -48,20 +56,25 @@ func AllSettled[T any](promises ...*Promise[T]) *Promise[[]Result[T]] {
 		}
 
 		results := make([]Result[T], len(promises))
-		completed := 0
+		var completed int32
+		var mu sync.Mutex
 
 		for i, p := range promises {
 			go func(index int, promise *Promise[T]) {
 				value, err := promise.Await()
 
+				// Use mutex to protect results array access
+				mu.Lock()
 				results[index] = Result[T]{
 					Value: value,
 					Error: err,
 					Index: index,
 				}
+				mu.Unlock()
 
-				completed++
-				if completed == len(promises) {
+				// Increment completed counter atomically
+				newCompleted := atomic.AddInt32(&completed, 1)
+				if newCompleted == int32(len(promises)) {
 					resolve(results)
 				}
 			}(i, p)

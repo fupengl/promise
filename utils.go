@@ -2,7 +2,6 @@ package promise
 
 import (
 	"context"
-	"errors"
 	"time"
 )
 
@@ -51,7 +50,12 @@ func Timeout[T any](promise *Promise[T], timeout time.Duration) *Promise[T] {
 		value, err := promise.AwaitWithContext(ctx)
 		if err != nil {
 			if err == context.DeadlineExceeded {
-				reject(errors.New("promise timeout"))
+				// Use TimeoutError type to wrap timeout error
+				reject(&PromiseError{
+					Message: "Promise timeout",
+					Cause:   err,
+					Type:    TimeoutError,
+				})
 			} else {
 				reject(err)
 			}
@@ -76,6 +80,54 @@ func Retry[T any](fn func() (T, error), maxRetries int, delay time.Duration) *Pr
 			lastErr = err
 			if i < maxRetries {
 				time.Sleep(delay)
+			}
+		}
+
+		reject(lastErr)
+	})
+}
+
+// RetryWithContext retries executing a function with context support for cancellation
+func RetryWithContext[T any](ctx context.Context, fn func() (T, error), maxRetries int, delay time.Duration) *Promise[T] {
+	return New(func(resolve func(T), reject func(error)) {
+		var lastErr error
+
+		for i := 0; i <= maxRetries; i++ {
+			// Check context cancellation before each attempt
+			select {
+			case <-ctx.Done():
+				// Context was cancelled, reject with cancellation error
+				reject(&PromiseError{
+					Message: "Retry cancelled",
+					Cause:   ctx.Err(),
+					Type:    RejectionError,
+				})
+				return
+			default:
+				// Continue with retry
+			}
+
+			value, err := fn()
+			if err == nil {
+				resolve(value)
+				return
+			}
+
+			lastErr = err
+			if i < maxRetries {
+				// Use context-aware sleep for delay
+				select {
+				case <-ctx.Done():
+					// Context was cancelled during delay
+					reject(&PromiseError{
+						Message: "Retry cancelled during delay",
+						Cause:   ctx.Err(),
+						Type:    RejectionError,
+					})
+					return
+				case <-time.After(delay):
+					// Delay completed, continue to next retry
+				}
 			}
 		}
 
