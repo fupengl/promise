@@ -98,6 +98,22 @@ result, _ := promise.Await()
 fmt.Println(result) // Output: Hello from external control!
 ```
 
+### Converting Go Functions with Promisify
+
+```go
+// Convert a function that returns (T, error) to a Promise function
+fetchData := func() (string, error) {
+    return "data from API", nil
+}
+
+// Convert to Promise function
+promiseFn := promise.Promisify(fetchData)
+
+// Execute and get result
+result, _ := promiseFn().Await()
+fmt.Println(result) // Output: data from API
+```
+
 ## 📚 Core API
 
 ### Constructors
@@ -165,6 +181,9 @@ func Timeout[T any](promise *Promise[T], timeout time.Duration) *Promise[T]
 
 // Retry mechanism
 func Retry[T any](fn func() (T, error), maxRetries int, delay time.Duration) *Promise[T]
+
+// Convert (T, error) function to Promise function
+func Promisify[T any](fn func() (T, error)) func() *Promise[T]
 
 // Array mapping
 func Map[T any, R any](items []T, fn func(T) *Promise[R]) *Promise[[]R]

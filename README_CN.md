@@ -127,6 +127,22 @@ result, _ := promise.Await()
 fmt.Println(result) // 输出: 来自外部控制的问候！
 ```
 
+### 使用 Promisify 转换Go函数
+
+```go
+// 将返回 (T, error) 的函数转换为Promise函数
+fetchData := func() (string, error) {
+    return "来自API的数据", nil
+}
+
+// 转换为Promise函数
+promiseFn := promise.Promisify(fetchData)
+
+// 执行并获取结果
+result, _ := promiseFn().Await()
+fmt.Println(result) // 输出: 来自API的数据
+```
+
 ## 📚 核心API
 
 ### 构造函数
@@ -197,6 +213,9 @@ func Timeout[T any](promise *Promise[T], timeout time.Duration) *Promise[T]
 
 // 重试机制
 func Retry[T any](fn func() (T, error), maxRetries int, delay time.Duration) *Promise[T]
+
+// 将返回 (T, error) 的函数转换为Promise函数
+func Promisify[T any](fn func() (T, error)) func() *Promise[T]
 
 // 数组映射
 func Map[T any, R any](items []T, fn func(T) *Promise[R]) *Promise[[]R]

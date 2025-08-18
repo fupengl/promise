@@ -1147,3 +1147,38 @@ func TestWithResolversWithMgr(t *testing.T) {
 		}
 	})
 }
+
+// TestPromisify tests the Promisify function
+func TestPromisify(t *testing.T) {
+	// Test successful function conversion
+	fn := func() (string, error) {
+		return "success result", nil
+	}
+
+	promiseFn := Promisify(fn)
+	promise := promiseFn()
+	result, err := promise.Await()
+
+	if err != nil {
+		t.Errorf("Expected no error, but got: %v", err)
+	}
+	if result != "success result" {
+		t.Errorf("Expected 'success result', but got: %v", result)
+	}
+
+	// Test error function conversion
+	errFn := func() (string, error) {
+		return "", errors.New("test error")
+	}
+
+	errPromiseFn := Promisify(errFn)
+	errPromise := errPromiseFn()
+	_, err = errPromise.Await()
+
+	if err == nil {
+		t.Error("Expected error, but got none")
+	}
+	if !strings.Contains(err.Error(), "test error") {
+		t.Errorf("Expected error to contain 'test error', but got: %v", err)
+	}
+}

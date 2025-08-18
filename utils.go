@@ -134,3 +134,18 @@ func RetryWithContext[T any](ctx context.Context, fn func() (T, error), maxRetri
 		reject(lastErr)
 	})
 }
+
+// Promisify converts a function that returns (T, error) to a function that returns *Promise[T]
+// This is the most common pattern in Go where functions return (value, error)
+func Promisify[T any](fn func() (T, error)) func() *Promise[T] {
+	return func() *Promise[T] {
+		return New(func(resolve func(T), reject func(error)) {
+			value, err := fn()
+			if err != nil {
+				reject(err)
+			} else {
+				resolve(value)
+			}
+		})
+	}
+}

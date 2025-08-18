@@ -339,3 +339,22 @@ func ExampleWithResolversWithMgr() {
 	fmt.Println(result)
 	// Output: Hello from custom manager!
 }
+
+// ExamplePromisify demonstrates the Promisify function
+func ExamplePromisify() {
+	// Create a function that returns (string, error) - common Go pattern
+	fetchData := func() (string, error) {
+		return "data from database", nil
+	}
+
+	// Convert to Promise function
+	promiseFn := Promisify(fetchData)
+
+	// Execute the promise function
+	promise := promiseFn()
+
+	// Wait for result
+	result, _ := promise.Await()
+	fmt.Println(result)
+	// Output: data from database
+}
