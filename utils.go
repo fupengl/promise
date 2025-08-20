@@ -57,7 +57,8 @@ func Timeout[T any](promise *Promise[T], timeout time.Duration) *Promise[T] {
 					Type:    TimeoutError,
 				})
 			} else {
-				reject(err)
+				// Use helper function to avoid double wrapping
+				reject(wrapErrorIfNeeded(err, "Promise operation failed", RejectionError))
 			}
 		} else {
 			resolve(value)
@@ -147,5 +148,29 @@ func Promisify[T any](fn func() (T, error)) func() *Promise[T] {
 				resolve(value)
 			}
 		})
+	}
+}
+
+// wrapErrorIfNeeded wraps an error as PromiseError only if it's not already one
+// This prevents double wrapping and improves error handling efficiency
+func wrapErrorIfNeeded(err error, message string, errorType ErrorType) error {
+	if err == nil {
+		return &PromiseError{
+			Message: message,
+			Cause:   nil,
+			Type:    errorType,
+		}
+	}
+
+	// Check if already a PromiseError to avoid double wrapping
+	if promiseErr, ok := err.(*PromiseError); ok {
+		return promiseErr
+	}
+
+	// Wrap as PromiseError
+	return &PromiseError{
+		Message: message,
+		Cause:   err,
+		Type:    errorType,
 	}
 }

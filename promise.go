@@ -68,12 +68,8 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 			if r := recover(); r != nil {
 				var panicErr error
 				if err, ok := r.(error); ok {
-					// Wrap error panic as PromiseError
-					panicErr = &PromiseError{
-						Message: "panic in executor",
-						Cause:   err,
-						Type:    PanicError,
-					}
+					// Use helper function to avoid double wrapping
+					panicErr = wrapErrorIfNeeded(err, "panic in executor", PanicError)
 				} else {
 					// Wrap non-error panic as PromiseError
 					panicErr = &PromiseError{
@@ -141,30 +137,10 @@ func (p *Promise[T]) reject(err error) {
 		return
 	}
 
-	// Wrap error to preserve context
-	var wrappedErr error
-	if err != nil {
-		if _, ok := err.(*PromiseError); ok {
-			// Already PromiseError, use directly
-			wrappedErr = err
-		} else {
-			// Wrap as PromiseError, preserve original error
-			wrappedErr = &PromiseError{
-				Message: "Promise rejected",
-				Cause:   err,
-				Type:    RejectionError,
-			}
-		}
-	} else {
-		// Nil error, create default error
-		wrappedErr = &PromiseError{
-			Message: "Promise rejected with nil error",
-			Cause:   nil,
-			Type:    RejectionError,
-		}
-	}
+	// Use helper function to avoid double wrapping
+	finalErr := wrapErrorIfNeeded(err, "Promise rejected", RejectionError)
 
-	p.setError(wrappedErr)
+	p.setError(finalErr)
 
 	p.mu.Lock()
 	if p.done == nil {
@@ -190,14 +166,14 @@ func (p *Promise[T]) reject(err error) {
 			if h.onRejected != nil {
 				handler := h.onRejected
 				next := h.next
-				errVal := wrappedErr
+				errVal := finalErr
 
 				p.manager.scheduleMicrotask(func() {
 					safeErrorCallback(handler, errVal, next)
 				})
 			} else if h.next != nil {
 				next := h.next
-				errVal := wrappedErr
+				errVal := finalErr
 
 				p.manager.scheduleMicrotask(func() {
 					next.reject(errVal)

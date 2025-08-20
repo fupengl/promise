@@ -1182,3 +1182,44 @@ func TestPromisify(t *testing.T) {
 		t.Errorf("Expected error to contain 'test error', but got: %v", err)
 	}
 }
+
+// TestErrorHandlingOptimization tests that errors are not double-wrapped
+func TestErrorHandlingOptimization(t *testing.T) {
+	// Test that PromiseError is not wrapped again
+	promiseErr := &PromiseError{
+		Message: "test error",
+		Type:    RejectionError,
+	}
+
+	p := New(func(resolve func(string), reject func(error)) {
+		reject(promiseErr)
+	})
+
+	_, err := p.Await()
+	if err == nil {
+		t.Error("Expected error, but got none")
+	}
+
+	// Verify it's the same error instance, not wrapped
+	if err != promiseErr {
+		t.Errorf("Expected same error instance, but got: %v", err)
+	}
+
+	// Test that regular errors are properly wrapped
+	regularErr := errors.New("regular error")
+	p2 := New(func(resolve func(string), reject func(error)) {
+		reject(regularErr)
+	})
+
+	_, err2 := p2.Await()
+	if err2 == nil {
+		t.Error("Expected error, but got none")
+	}
+
+	// Verify it's wrapped as PromiseError
+	if promiseErr2, ok := err2.(*PromiseError); !ok {
+		t.Errorf("Expected PromiseError, but got: %T", err2)
+	} else if promiseErr2.Cause != regularErr {
+		t.Errorf("Expected cause to be original error, but got: %v", promiseErr2.Cause)
+	}
+}
