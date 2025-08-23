@@ -151,6 +151,21 @@ func Promisify[T any](fn func() (T, error)) func() *Promise[T] {
 	}
 }
 
+// PromisifyWithMgr converts a function that returns (T, error) to a function that returns *Promise[T]
+// This is the most common pattern in Go where functions return (value, error)
+func PromisifyWithMgr[T any](mgr *PromiseMgr, fn func() (T, error)) func() *Promise[T] {
+	return func() *Promise[T] {
+		return NewWithMgr(mgr, func(resolve func(T), reject func(error)) {
+			value, err := fn()
+			if err != nil {
+				reject(err)
+			} else {
+				resolve(value)
+			}
+		})
+	}
+}
+
 // wrapErrorIfNeeded wraps an error as PromiseError only if it's not already one
 // This prevents double wrapping and improves error handling efficiency
 func wrapErrorIfNeeded(err error, message string, errorType ErrorType) error {
@@ -172,20 +187,5 @@ func wrapErrorIfNeeded(err error, message string, errorType ErrorType) error {
 		Message: message,
 		Cause:   err,
 		Type:    errorType,
-	}
-}
-
-// PromisifyWithMgr converts a function that returns (T, error) to a function that returns *Promise[T]
-// This is the most common pattern in Go where functions return (value, error)
-func PromisifyWithMgr[T any](mgr *PromiseMgr, fn func() (T, error)) func() *Promise[T] {
-	return func() *Promise[T] {
-		return NewWithMgr(mgr, func(resolve func(T), reject func(error)) {
-			value, err := fn()
-			if err != nil {
-				reject(err)
-			} else {
-				resolve(value)
-			}
-		})
 	}
 }
