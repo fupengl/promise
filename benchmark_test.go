@@ -132,7 +132,7 @@ func BenchmarkWithResolvers(b *testing.B) {
 
 // BenchmarkWithResolversWithMgr measures the performance of WithResolversWithMgr function
 func BenchmarkWithResolversWithMgr(b *testing.B) {
-	manager := NewPromiseMgr(4)
+	manager := NewPromiseMgr()
 	defer manager.Close()
 
 	b.ResetTimer()
@@ -170,5 +170,64 @@ func BenchmarkRejectMultipleTimes(b *testing.B) {
 		reject(errors.New("third"))  // This should be ignored
 
 		_, _ = promise.Await()
+	}
+}
+
+// BenchmarkMemoryAllocation tests memory allocation patterns
+func BenchmarkMemoryAllocation(b *testing.B) {
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		// Create a new Promise
+		p := New(func(resolve func(int), reject func(error)) {
+			resolve(42)
+		})
+
+		// Chain multiple operations
+		p.Then(func(value int) any {
+			return value * 2
+		}, nil).Then(func(value any) any {
+			return value.(int) + 1
+		}, nil).Catch(func(err error) any {
+			return -1
+		})
+
+		// Await the result
+		_, _ = p.Await()
+	}
+}
+
+// BenchmarkConcurrentPromiseCreation tests concurrent Promise creation
+func BenchmarkConcurrentPromiseCreation(b *testing.B) {
+	b.ReportAllocs()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			p := New(func(resolve func(int), reject func(error)) {
+				resolve(42)
+			})
+			_, _ = p.Await()
+		}
+	})
+}
+
+// BenchmarkTaskPoolReuse tests the effectiveness of task pool reuse
+func BenchmarkTaskPoolReuse(b *testing.B) {
+	b.ReportAllocs()
+
+	// Create a custom manager with small pool
+	mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+		ExecutorWorkers:    2,
+		ExecutorQueueSize:  4,
+		MicrotaskWorkers:   1,
+		MicrotaskQueueSize: 2,
+	})
+	defer mgr.Close()
+
+	for i := 0; i < b.N; i++ {
+		p := NewWithMgr(mgr, func(resolve func(int), reject func(error)) {
+			resolve(i)
+		})
+		_, _ = p.Await()
 	}
 }

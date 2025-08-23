@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 )
 
-// Promise state enumeration
 type State int
 
 const (
@@ -15,16 +14,15 @@ const (
 	Rejected
 )
 
-// Error type enumeration for Promise errors
 type ErrorType int
 
 const (
 	RejectionError ErrorType = iota // Promise rejected
 	PanicError                      // Panic occurred in callback
 	TimeoutError                    // Promise timeout
+	ManagerError                    // Manager-related errors
 )
 
-// PromiseError provides rich error information for Promise operations
 type PromiseError struct {
 	Message       string      // Human-readable error message
 	Cause         error       // Original error that caused this
@@ -80,7 +78,6 @@ func (e *PromiseError) As(target interface{}) bool {
 	return false
 }
 
-// Promise structure
 type Promise[T any] struct {
 	// Atomic state and value management
 	state atomic.Value // State
@@ -106,12 +103,21 @@ func (p *Promise[T]) getState() State {
 
 // Helper function: safely set state
 func (p *Promise[T]) setState(state State) bool {
-	// Initialize if needed, then use CompareAndSwap
-	if p.state.Load() == nil {
-		p.state.Store(Pending)
+	// Use atomic operation to ensure only one goroutine can set the state
+	// First, try to initialize to Pending if not already set
+	for {
+		currentState := p.state.Load()
+		if currentState == nil {
+			// Try to initialize to Pending
+			if p.state.CompareAndSwap(nil, Pending) {
+				break // Successfully initialized
+			}
+			continue // Another goroutine initialized, retry
+		}
+		break // Already initialized
 	}
 
-	// Try to transition from Pending to target state
+	// Now try to transition from Pending to target state
 	if p.state.CompareAndSwap(Pending, state) {
 		return true
 	}
@@ -148,16 +154,23 @@ func (p *Promise[T]) setError(err error) {
 	p.err.Store(err)
 }
 
-// Handler structure for processing
 type handler[T any] struct {
 	onFulfilled func(T) any
 	onRejected  func(error) any
 	next        *Promise[any]
 }
 
-// Result represents the result of a Promise
 type Result[T any] struct {
 	Value T
 	Error error
 	Index int
 }
+
+// Predefined errors for common scenarios
+var (
+	// ErrManagerStopped is returned when trying to use a stopped manager
+	ErrManagerStopped = &PromiseError{
+		Message: "manager is stopped",
+		Type:    ManagerError,
+	}
+)

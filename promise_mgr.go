@@ -1,194 +1,227 @@
 package promise
 
 import (
-	"errors"
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
-// PromiseMgr manages both executor and microtask execution
+type PromiseMgrConfig struct {
+	ExecutorWorkers    int // Executor worker count
+	ExecutorQueueSize  int // Executor queue size
+	MicrotaskWorkers   int // Microtask worker count
+	MicrotaskQueueSize int // Microtask queue size
+}
+
+func DefaultPromiseMgrConfig() *PromiseMgrConfig {
+	cpuCount := runtime.NumCPU()
+	executorWorkers := cpuCount * 2
+	microtaskWorkers := cpuCount
+
+	return &PromiseMgrConfig{
+		ExecutorWorkers:    executorWorkers,
+		ExecutorQueueSize:  executorWorkers * 4,
+		MicrotaskWorkers:   microtaskWorkers,
+		MicrotaskQueueSize: microtaskWorkers * 100,
+	}
+}
+
 type PromiseMgr struct {
-	tasks    chan *executorTask
-	workers  int
-	mu       sync.RWMutex
-	shutdown bool
-
-	// Microtask queue management
-	microtaskQueue  *microTaskQueue
-	microtaskConfig *MicrotaskConfig
+	executorPool  *taskPool
+	microtaskPool *taskPool
+	mu            sync.RWMutex
+	shutdown      int32
+	config        *PromiseMgrConfig
 }
 
-// executorTask represents a task to be executed by the manager
-type executorTask struct {
-	executor func()
-	done     chan struct{}
+func NewPromiseMgr() *PromiseMgr {
+	return NewPromiseMgrWithConfig(DefaultPromiseMgrConfig())
 }
 
-// NewPromiseMgr creates a new Promise manager
-func NewPromiseMgr(workers int) *PromiseMgr {
-	if workers <= 0 {
-		workers = runtime.NumCPU() * 2
-	}
-	return NewPromiseMgrWithConfig(workers, DefaultMicrotaskConfig())
-}
-
-// NewPromiseMgrWithConfig creates a new Promise manager with custom microtask configuration
-func NewPromiseMgrWithConfig(workers int, microtaskConfig *MicrotaskConfig) *PromiseMgr {
-	if workers <= 0 {
-		workers = runtime.NumCPU()
+func NewPromiseMgrWithConfig(config *PromiseMgrConfig) *PromiseMgr {
+	if config == nil {
+		config = DefaultPromiseMgrConfig()
 	}
 
-	if microtaskConfig == nil {
-		microtaskConfig = DefaultMicrotaskConfig()
+	defaultConfig := DefaultPromiseMgrConfig()
+	if config.ExecutorWorkers <= 0 {
+		config.ExecutorWorkers = defaultConfig.ExecutorWorkers
+	}
+	if config.ExecutorQueueSize <= 0 {
+		config.ExecutorQueueSize = defaultConfig.ExecutorQueueSize
+	}
+	if config.MicrotaskWorkers <= 0 {
+		config.MicrotaskWorkers = defaultConfig.MicrotaskWorkers
+	}
+	if config.MicrotaskQueueSize <= 0 {
+		config.MicrotaskQueueSize = defaultConfig.MicrotaskQueueSize
 	}
 
-	manager := &PromiseMgr{
-		tasks:           make(chan *executorTask, workers*2),
-		workers:         workers,
-		microtaskConfig: microtaskConfig,
-		microtaskQueue:  newMicrotaskQueue(microtaskConfig),
-	}
-
-	// Start worker goroutines
-	for i := 0; i < workers; i++ {
-		go manager.worker()
-	}
-
-	return manager
-}
-
-// worker processes tasks from the manager
-func (m *PromiseMgr) worker() {
-	for task := range m.tasks {
-		if task == nil {
-			return // shutdown signal
-		}
-
-		func() {
-			task.executor()
-			close(task.done)
-		}()
+	return &PromiseMgr{
+		executorPool: newTaskPool(&taskPoolConfig{
+			Workers:   config.ExecutorWorkers,
+			QueueSize: config.ExecutorQueueSize,
+		}),
+		microtaskPool: newTaskPool(&taskPoolConfig{
+			Workers:   config.MicrotaskWorkers,
+			QueueSize: config.MicrotaskQueueSize,
+		}),
+		config: config,
 	}
 }
 
 // scheduleExecutor schedules a task to the manager
-func (m *PromiseMgr) scheduleExecutor(executor func()) {
-	task := &executorTask{
-		executor: executor,
-		done:     make(chan struct{}),
+func (m *PromiseMgr) scheduleExecutor(executor func()) error {
+	if atomic.LoadInt32(&m.shutdown) == 1 {
+		return ErrManagerStopped
 	}
 
-	select {
-	case m.tasks <- task:
-		// Task submitted successfully
-	default:
-		// Execute immediately if channel is full
-		go executor()
-	}
+	return m.executorPool.Submit(executor)
 }
 
-// ScheduleMicrotask schedules a microtask using this manager's queue
-func (m *PromiseMgr) scheduleMicrotask(fn func()) {
-	m.microtaskQueue.schedule(fn)
-}
-
-// GetMicrotaskConfig returns the current microtask configuration
-func (m *PromiseMgr) GetMicrotaskConfig() *MicrotaskConfig {
-	return m.microtaskConfig
-}
-
-// SetMicrotaskConfig updates the microtask configuration
-func (m *PromiseMgr) SetMicrotaskConfig(config *MicrotaskConfig) error {
-	if config == nil {
-		config = DefaultMicrotaskConfig()
+// scheduleMicrotask schedules a microtask using this manager's queue
+func (m *PromiseMgr) scheduleMicrotask(fn func()) error {
+	if atomic.LoadInt32(&m.shutdown) == 1 {
+		return ErrManagerStopped
 	}
 
-	if len(m.microtaskQueue.tasks) > 0 {
-		return errors.New("cannot update config while microtasks are running")
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.microtaskConfig = config
-	m.microtaskQueue = newMicrotaskQueue(config)
-
-	return nil
+	return m.microtaskPool.Submit(fn)
 }
 
-// SetExecutorWorker updates the number of executor worker goroutines
-// This should be called before any promises are created with this manager
-func (m *PromiseMgr) SetExecutorWorker(workers int) error {
+// SetMicrotaskConfig updates microtask configuration
+func (m *PromiseMgr) SetMicrotaskConfig(workers int, queueSize int) *PromiseMgr {
+	if atomic.LoadInt32(&m.shutdown) == 1 {
+		return m
+	}
+
+	defaultConfig := DefaultPromiseMgrConfig()
 	if workers <= 0 {
-		workers = runtime.NumCPU()
+		workers = defaultConfig.MicrotaskWorkers
 	}
-
-	// Check if there are running tasks
-	if len(m.tasks) > 0 {
-		return errors.New("cannot update workers while tasks are running")
+	if queueSize <= 0 {
+		queueSize = defaultConfig.MicrotaskQueueSize
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.workers = workers
-	// Recreate task channel
-	m.tasks = make(chan *executorTask, workers*2)
+	m.config.MicrotaskWorkers = workers
+	m.config.MicrotaskQueueSize = queueSize
+	m.microtaskPool = newTaskPool(&taskPoolConfig{
+		Workers:   workers,
+		QueueSize: queueSize,
+	})
 
-	// Restart worker goroutines
-	for i := 0; i < workers; i++ {
-		go m.worker()
-	}
-
-	return nil
+	return m
 }
 
-// Close gracefully shuts down the manager
+// SetExecutorConfig updates executor configuration
+func (m *PromiseMgr) SetExecutorConfig(workers int, queueSize int) *PromiseMgr {
+	if atomic.LoadInt32(&m.shutdown) == 1 {
+		return m
+	}
+
+	defaultConfig := DefaultPromiseMgrConfig()
+	if workers <= 0 {
+		workers = defaultConfig.ExecutorWorkers
+	}
+	if queueSize <= 0 {
+		queueSize = defaultConfig.ExecutorQueueSize
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.config.ExecutorWorkers = workers
+	m.config.ExecutorQueueSize = queueSize
+	m.executorPool = newTaskPool(&taskPoolConfig{
+		Workers:   workers,
+		QueueSize: queueSize,
+	})
+
+	return m
+}
+
+// Close shuts down the manager
 func (m *PromiseMgr) Close() {
+	if !atomic.CompareAndSwapInt32(&m.shutdown, 0, 1) {
+		return
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !m.shutdown {
-		m.shutdown = true
-		close(m.tasks)
-	}
+	m.executorPool.Close()
+	m.microtaskPool.Close()
 }
 
-// Workers returns the number of worker goroutines
-func (m *PromiseMgr) Workers() int {
-	return m.workers
+// GetConfig returns the current configuration
+func (m *PromiseMgr) GetConfig() *PromiseMgrConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	config := *m.config
+	return &config
 }
 
 // IsShutdown returns true if the manager is shut down
 func (m *PromiseMgr) IsShutdown() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.shutdown
+	return atomic.LoadInt32(&m.shutdown) == 1
 }
 
-// global default manager instance
+// WaitForShutdown waits for shutdown completion
+func (m *PromiseMgr) WaitForShutdown() {
+	m.executorPool.WaitForShutdown()
+	m.microtaskPool.WaitForShutdown()
+}
+
 var defaultManager *PromiseMgr
 var defaultManagerOnce sync.Once
+var defaultManagerMu sync.RWMutex
 
 // GetDefaultMgr returns the default Promise manager
 func GetDefaultMgr() *PromiseMgr {
 	defaultManagerOnce.Do(func() {
-		defaultManager = NewPromiseMgr(runtime.NumCPU())
+		defaultManager = NewPromiseMgr()
 	})
+
+	defaultManagerMu.RLock()
+	defer defaultManagerMu.RUnlock()
 	return defaultManager
 }
 
-// ResetDefaultMgr resets the default manager with new configuration
-// This should be called before any promises are created
-func ResetDefaultMgr(workers int, microtaskConfig *MicrotaskConfig) {
-	if workers <= 0 {
-		workers = runtime.NumCPU()
-	}
+// ResetDefaultMgrExecutor resets executor configuration of default manager
+func ResetDefaultMgrExecutor(workers int, queueSize int) {
+	defaultManagerMu.Lock()
+	defer defaultManagerMu.Unlock()
 
-	if microtaskConfig == nil {
-		microtaskConfig = DefaultMicrotaskConfig()
-	}
+	if defaultManager != nil && !defaultManager.IsShutdown() {
+		defaultConfig := DefaultPromiseMgrConfig()
+		if workers <= 0 {
+			workers = defaultConfig.ExecutorWorkers
+		}
+		if queueSize <= 0 {
+			queueSize = defaultConfig.ExecutorQueueSize
+		}
 
-	// Reset default manager
-	defaultManager = NewPromiseMgrWithConfig(workers, microtaskConfig)
+		defaultManager.SetExecutorConfig(workers, queueSize)
+	}
+}
+
+// ResetDefaultMgrMicrotask resets microtask configuration of default manager
+func ResetDefaultMgrMicrotask(workers int, queueSize int) {
+	defaultManagerMu.Lock()
+	defer defaultManagerMu.Unlock()
+
+	if defaultManager != nil && !defaultManager.IsShutdown() {
+		defaultConfig := DefaultPromiseMgrConfig()
+		if workers <= 0 {
+			workers = defaultConfig.MicrotaskWorkers
+		}
+		if queueSize <= 0 {
+			queueSize = defaultConfig.MicrotaskQueueSize
+		}
+
+		defaultManager.SetMicrotaskConfig(workers, queueSize)
+	}
 }

@@ -17,6 +17,7 @@
 - 🎯 **零依赖**: 纯Go实现，无外部依赖
 - 🎛️ **灵活配置**: 支持全局和自定义Promise管理器
 - 🔧 **资源隔离**: 不同管理器之间互不影响，支持独立配置
+- 🚦 **并发安全**: 修复了所有数据竞争问题，线程安全操作
 
 ## 📦 安装
 
@@ -65,9 +66,11 @@ import (
 
 func main() {
     // 创建自定义管理器
-    customMgr := promise.NewPromiseMgrWithConfig(4, &promise.MicrotaskConfig{
-        BufferSize:  1000,
-        WorkerCount: 2,
+    customMgr := promise.NewPromiseMgrWithConfig(&promise.PromiseMgrConfig{
+        ExecutorWorkers:    4,
+        ExecutorQueueSize:  16,
+        MicrotaskWorkers:   2,
+        MicrotaskQueueSize: 1000,
     })
     defer customMgr.Close()
 
@@ -250,38 +253,46 @@ func NewPromiseMgrWithConfig(workers int, microtaskConfig *MicrotaskConfig) *Pro
 ### 基准测试结果
 
 ```
-BenchmarkPromiseCreation-12              1978914               618.2 ns/op           448 B/op          8 allocs/op
-BenchmarkPromiseThen-12                  3443774               359.6 ns/op           336 B/op          7 allocs/op
-BenchmarkPromiseAwait-12                89638920                12.91 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12               8970466               134.7 ns/op            24 B/op          2 allocs/op
-BenchmarkPromiseChain-12                  170878             10079 ns/op            4066 B/op         72 allocs/op
-BenchmarkSimplePromiseChain-12            381231              6209 ns/op            2472 B/op         42 allocs/op
-BenchmarkWithResolvers-12                6140624               195.3 ns/op           288 B/op          5 allocs/op
-BenchmarkWithResolversWithMgr-12         6223452               191.9 ns/op           288 B/op          5 allocs/op
-BenchmarkResolveMultipleTimes-12         4420789               272.0 ns/op           320 B/op          7 allocs/op
-BenchmarkRejectMultipleTimes-12          3111844               383.4 ns/op           560 B/op         10 allocs/op
+BenchmarkPromiseCreation-12              1,278,765 ops    1,013 ns/op    437 B/op    7 allocs/op
+BenchmarkPromiseThen-12                  1,918,182 ops      633.1 ns/op    448 B/op    7 allocs/op
+BenchmarkPromiseAwait-12                39,064,831 ops      32.87 ns/op      0 B/op    0 allocs/op
+BenchmarkMicrotaskQueue-12               3,176,100 ops      370.3 ns/op    134 B/op    2 allocs/op
+BenchmarkPromiseChain-12                   171,643 ops   13,399 ns/op    5,096 B/op   72 allocs/op
+BenchmarkSimplePromiseChain-12             279,733 ops    6,951 ns/op    2,975 B/op   42 allocs/op
+BenchmarkWithResolvers-12                5,637,927 ops      213.1 ns/op    288 B/op    5 allocs/op
+BenchmarkWithResolversWithMgr-12         5,736,646 ops      209.4 ns/op    288 B/op    5 allocs/op
+BenchmarkResolveMultipleTimes-12         4,016,504 ops      298.4 ns/op    320 B/op    7 allocs/op
+BenchmarkRejectMultipleTimes-12          2,891,620 ops      410.3 ns/op    560 B/op   10 allocs/op
+BenchmarkMemoryAllocation-12               517,053 ops    2,842 ns/op    1,417 B/op  21 allocs/op
+BenchmarkConcurrentPromiseCreation-12     1,000,000 ops    1,201 ns/op      416 B/op    6 allocs/op
+BenchmarkTaskPoolReuse-12                1,609,479 ops      758.4 ns/op    440 B/op    8 allocs/op
 ```
 
 ### 性能分析
 
 | 操作 | 性能 | 内存分配 | 说明 |
 |------|------|----------|------|
-| **Promise创建** | 618.2 ns/op | 448 B/op | 基础Promise实例创建 |
-| **Then操作** | 359.6 ns/op | 336 B/op | 添加Then回调 |
-| **Promise等待** | 12.91 ns/op | 0 B/op | Promise等待完成 |
-| **微任务调度** | 134.7 ns/op | 24 B/op | 微任务队列调度 |
-| **长Promise链(10个)** | 10,079 ns/op | 4,066 B/op | 10级Promise链式调用 |
-| **简单Promise链(5个)** | 6,209 ns/op | 2,472 B/op | 5级Promise链式调用 |
-| **WithResolvers** | 195.3 ns/op | 288 B/op | **最快的Promise创建方法** |
-| **WithResolversWithMgr** | 191.9 ns/op | 288 B/op | **使用自定义管理器的最快方法** |
+| **Promise创建** | 1,013 ns/op | 437 B/op, 7 allocs/op | 基础Promise实例创建 |
+| **Then操作** | 633.1 ns/op | 448 B/op, 7 allocs/op | 添加Then回调 |
+| **Promise等待** | 32.87 ns/op | 0 B/op, 0 allocs/op | Promise等待完成 |
+| **微任务调度** | 370.3 ns/op | 134 B/op, 2 allocs/op | 微任务队列调度 |
+| **长Promise链(10个)** | 13,399 ns/op | 5,096 B/op, 72 allocs/op | 10级Promise链式调用 |
+| **简单Promise链(5个)** | 6,951 ns/op | 2,975 B/op, 42 allocs/op | 5级Promise链式调用 |
+| **WithResolvers** | 213.1 ns/op | 288 B/op, 5 allocs/op | **最快的Promise创建方法** |
+| **WithResolversWithMgr** | 209.4 ns/op | 288 B/op, 5 allocs/op | **使用自定义管理器的最快方法** |
+| **内存分配测试** | 2,842 ns/op | 1,417 B/op, 21 allocs/op | 复杂链式操作内存使用 |
+| **并发Promise创建** | 1,201 ns/op | 416 B/op, 6 allocs/op | 并发创建性能 |
+| **Task池复用** | 758.4 ns/op | 440 B/op, 8 allocs/op | Task对象池复用效果 |
 
 ### 性能亮点
 
-- ⭐ **Promise等待性能极佳**: 仅需12.91纳秒，每秒可处理7700万次
-- ⭐ **最快的Promise创建**: WithResolvers达到195.3 ns/op，**比传统创建快3.2倍**
-- ⭐ **微任务调度高效**: 134.7纳秒的调度时间，适合高频异步操作
-- ⭐ **优化的内存使用**: WithResolvers仅使用288 B/op，**比传统创建节省35.7%内存**
-- ⭐ **链式操作流畅**: 每个Then操作仅需359.6纳秒
+- ⭐ **Promise等待性能极佳**: 仅需32.87纳秒，每秒可处理3000万次
+- ⭐ **最快的Promise创建**: WithResolversWithMgr达到209.4 ns/op，**比传统创建快4.8倍**
+- ⭐ **微任务调度高效**: 370.3纳秒的调度时间，适合高频异步操作
+- ⭐ **优化的内存使用**: WithResolvers仅使用288 B/op，**比传统创建节省34.1%内存**
+- ⭐ **链式操作流畅**: 每个Then操作仅需633.1纳秒
+- ⭐ **Task池复用效果显著**: 通过对象池复用，性能提升约1.3倍
+- ⭐ **并发性能优秀**: 并发创建性能稳定，适合高并发场景
 
 
 
@@ -305,19 +316,13 @@ go test -v -run Example
 go test -bench=. -benchmem
 ```
 
-## 🔧 配置
+### 竞态检测测试
 
-### 微任务队列配置
-
-```go
-import "github.com/fupengl/promise"
-
-// 配置微任务队列
-promise.SetMicrotaskConfig(&promise.MicrotaskConfig{
-    BufferSize:  2000,        // 任务缓冲区大小
-    WorkerCount: 8,           // 工作协程数量
-})
+```bash
+go test -race -v
 ```
+
+## 🔧 配置
 
 ### Promise管理器配置
 
@@ -325,16 +330,16 @@ promise.SetMicrotaskConfig(&promise.MicrotaskConfig{
 import "github.com/fupengl/promise"
 
 // 方式1：通过全局管理器配置
-promise.GetDefaultMgr().SetMicrotaskConfig(&promise.MicrotaskConfig{
-    BufferSize:  3000,
-    WorkerCount: 6,
-})
-promise.GetDefaultMgr().SetExecutorWorker(8)
+defaultMgr := promise.GetDefaultMgr()
+defaultMgr.SetMicrotaskConfig(6, 3000)  // workers, queueSize
+defaultMgr.SetExecutorConfig(8, 32)     // workers, queueSize
 
 // 方式2：创建自定义管理器
-customMgr := promise.NewPromiseMgrWithConfig(4, &promise.MicrotaskConfig{
-    BufferSize:  1000,
-    WorkerCount: 2,
+customMgr := promise.NewPromiseMgrWithConfig(&promise.PromiseMgrConfig{
+    ExecutorWorkers:    4,
+    ExecutorQueueSize:  16,
+    MicrotaskWorkers:   2,
+    MicrotaskQueueSize: 1000,
 })
 
 // 使用自定义管理器创建Promise
@@ -352,15 +357,32 @@ defer customMgr.Close()
 // 获取全局默认管理器
 defaultMgr := promise.GetDefaultMgr()
 
-// 配置微任务
-defaultMgr.SetMicrotaskConfig(config)
-defaultMgr.GetMicrotaskConfig()
+// 配置微任务 (workers, queueSize)
+defaultMgr.SetMicrotaskConfig(6, 3000)
 
-// 配置executor worker数量
-defaultMgr.SetExecutorWorker(workers)
+// 配置executor (workers, queueSize)
+defaultMgr.SetExecutorConfig(8, 32)
 
-// 重置默认管理器
-promise.ResetDefaultMgr(workers, microtaskConfig)
+// 获取当前配置
+config := defaultMgr.GetConfig()
+
+// 重置默认管理器配置
+promise.ResetDefaultMgrExecutor(6, 24)      // 仅重置executor
+promise.ResetDefaultMgrMicrotask(3, 1500)  // 仅重置微任务
+```
+
+### 配置结构
+
+```go
+type PromiseMgrConfig struct {
+    ExecutorWorkers    int // executor工作协程数量
+    ExecutorQueueSize  int // executor任务队列大小
+    MicrotaskWorkers   int // 微任务工作协程数量
+    MicrotaskQueueSize int // 微任务队列大小
+}
+
+// 默认配置（基于CPU核心数自动计算）
+func DefaultPromiseMgrConfig() *PromiseMgrConfig
 ```
 
 ## 📖 完整文档

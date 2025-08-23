@@ -460,12 +460,13 @@ func TestRejectFunction(t *testing.T) {
 // TestMicrotaskConfig tests the microtask configuration
 func TestMicrotaskConfig(t *testing.T) {
 	// Test default config
-	defaultConfig := DefaultMicrotaskConfig()
-	if defaultConfig.BufferSize != 10000 {
-		t.Errorf("Expected default BufferSize 10000, got %d", defaultConfig.BufferSize)
+	defaultConfig := DefaultPromiseMgrConfig()
+	expectedQueueSize := runtime.NumCPU() * 100
+	if defaultConfig.MicrotaskQueueSize != expectedQueueSize {
+		t.Errorf("Expected default MicrotaskQueueSize %d, got %d", expectedQueueSize, defaultConfig.MicrotaskQueueSize)
 	}
-	if defaultConfig.WorkerCount != runtime.NumCPU()*2 {
-		t.Errorf("Expected default WorkerCount %d, got %d", runtime.NumCPU()*2, defaultConfig.WorkerCount)
+	if defaultConfig.MicrotaskWorkers != runtime.NumCPU() {
+		t.Errorf("Expected default MicrotaskWorkers %d, got %d", runtime.NumCPU(), defaultConfig.MicrotaskWorkers)
 	}
 
 	// Test that we can get the default manager
@@ -475,9 +476,14 @@ func TestMicrotaskConfig(t *testing.T) {
 	}
 
 	// Test that we can get the current config
-	currentConfig := defaultMgr.GetMicrotaskConfig()
-	if currentConfig.BufferSize != 10000 {
-		t.Errorf("Expected default BufferSize 10000, got %d", currentConfig.BufferSize)
+	currentConfig := defaultMgr.GetConfig()
+	// Note: The default manager might have been modified by other tests
+	// So we only verify it's not nil and has reasonable values
+	if currentConfig.MicrotaskQueueSize <= 0 {
+		t.Errorf("Expected positive MicrotaskQueueSize, got %d", currentConfig.MicrotaskQueueSize)
+	}
+	if currentConfig.MicrotaskWorkers <= 0 {
+		t.Errorf("Expected positive MicrotaskWorkers, got %d", currentConfig.MicrotaskWorkers)
 	}
 }
 
@@ -509,61 +515,52 @@ func TestGlobalManagerConfiguration(t *testing.T) {
 	}
 
 	// Test setting microtask config
-	customConfig := &MicrotaskConfig{
-		BufferSize:  2000,
-		WorkerCount: 4,
-	}
-
-	err := defaultMgr.SetMicrotaskConfig(customConfig)
-	if err != nil {
-		t.Errorf("Failed to set microtask config: %v", err)
-	}
+	defaultMgr.SetMicrotaskConfig(4, 2000)
 
 	// Verify config was set
-	currentConfig := defaultMgr.GetMicrotaskConfig()
-	if currentConfig.BufferSize != 2000 {
-		t.Errorf("Expected BufferSize 2000, got %d", currentConfig.BufferSize)
+	currentConfig := defaultMgr.GetConfig()
+	if currentConfig.MicrotaskQueueSize != 2000 {
+		t.Errorf("Expected MicrotaskQueueSize 2000, got %d", currentConfig.MicrotaskQueueSize)
 	}
-	if currentConfig.WorkerCount != 4 {
-		t.Errorf("Expected WorkerCount 4, got %d", currentConfig.WorkerCount)
+	if currentConfig.MicrotaskWorkers != 4 {
+		t.Errorf("Expected MicrotaskWorkers 4, got %d", currentConfig.MicrotaskWorkers)
 	}
 
 	// Test setting executor workers
-	err = defaultMgr.SetExecutorWorker(8)
-	if err != nil {
-		t.Errorf("Failed to set executor workers: %v", err)
-	}
+	defaultMgr.SetExecutorConfig(8, 32)
 
-	if defaultMgr.Workers() != 8 {
-		t.Errorf("Expected 8 workers, got %d", defaultMgr.Workers())
+	// Get updated config after setting executor config
+	updatedConfig := defaultMgr.GetConfig()
+	if updatedConfig.ExecutorWorkers != 8 {
+		t.Errorf("Expected 8 workers, got %d", updatedConfig.ExecutorWorkers)
 	}
 }
 
 // TestCustomManager tests custom manager functionality
 func TestCustomManager(t *testing.T) {
 	// Create custom manager
-	customConfig := &MicrotaskConfig{
-		BufferSize:  1000,
-		WorkerCount: 2,
-	}
-
-	customMgr := NewPromiseMgrWithConfig(4, customConfig)
+	customMgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+		ExecutorWorkers:    4,
+		ExecutorQueueSize:  16,
+		MicrotaskWorkers:   2,
+		MicrotaskQueueSize: 1000,
+	})
 	if customMgr == nil {
 		t.Error("Custom manager should not be nil")
 	}
 
 	// Verify custom config
-	config := customMgr.GetMicrotaskConfig()
-	if config.BufferSize != 1000 {
-		t.Errorf("Expected BufferSize 1000, got %d", config.BufferSize)
+	config := customMgr.GetConfig()
+	if config.MicrotaskQueueSize != 1000 {
+		t.Errorf("Expected MicrotaskQueueSize 1000, got %d", config.MicrotaskQueueSize)
 	}
-	if config.WorkerCount != 2 {
-		t.Errorf("Expected WorkerCount 2, got %d", config.WorkerCount)
+	if config.MicrotaskWorkers != 2 {
+		t.Errorf("Expected MicrotaskWorkers 2, got %d", config.MicrotaskWorkers)
 	}
 
 	// Verify worker count
-	if customMgr.Workers() != 4 {
-		t.Errorf("Expected 4 workers, got %d", customMgr.Workers())
+	if config.ExecutorWorkers != 4 {
+		t.Errorf("Expected 4 workers, got %d", config.ExecutorWorkers)
 	}
 
 	// Test Promise creation with custom manager
@@ -591,18 +588,28 @@ func TestCustomManager(t *testing.T) {
 // TestManagerIsolation tests that different managers are isolated
 func TestManagerIsolation(t *testing.T) {
 	// Create two different managers
-	mgr1 := NewPromiseMgrWithConfig(2, &MicrotaskConfig{BufferSize: 500, WorkerCount: 1})
-	mgr2 := NewPromiseMgrWithConfig(3, &MicrotaskConfig{BufferSize: 1000, WorkerCount: 2})
+	mgr1 := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+		ExecutorWorkers:    2,
+		ExecutorQueueSize:  8,
+		MicrotaskWorkers:   1,
+		MicrotaskQueueSize: 500,
+	})
+	mgr2 := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+		ExecutorWorkers:    3,
+		ExecutorQueueSize:  12,
+		MicrotaskWorkers:   2,
+		MicrotaskQueueSize: 1000,
+	})
 
 	// Verify they have different configurations
-	if mgr1.Workers() == mgr2.Workers() {
+	if mgr1.GetConfig().ExecutorWorkers == mgr2.GetConfig().ExecutorWorkers {
 		t.Error("Managers should have different worker counts")
 	}
 
-	config1 := mgr1.GetMicrotaskConfig()
-	config2 := mgr2.GetMicrotaskConfig()
+	config1 := mgr1.GetConfig()
+	config2 := mgr2.GetConfig()
 
-	if config1.BufferSize == config2.BufferSize {
+	if config1.MicrotaskQueueSize == config2.MicrotaskQueueSize {
 		t.Error("Managers should have different buffer sizes")
 	}
 
@@ -637,27 +644,28 @@ func TestResetDefaultManager(t *testing.T) {
 	initialMgr := GetDefaultMgr()
 
 	// Reset with new configuration
-	ResetDefaultMgr(6, &MicrotaskConfig{BufferSize: 1500, WorkerCount: 3})
+	ResetDefaultMgrExecutor(6, 24)
+	ResetDefaultMgrMicrotask(3, 1500)
 
-	// Get new manager
-	newMgr := GetDefaultMgr()
+	// Get updated manager (same instance, updated config)
+	updatedMgr := GetDefaultMgr()
 
-	// Should be different instance
-	if initialMgr == newMgr {
-		t.Error("Manager should be reset to new instance")
+	// Should be the same instance (we're updating config, not creating new manager)
+	if initialMgr != updatedMgr {
+		t.Error("Manager should remain the same instance when updating config")
 	}
 
 	// Verify new configuration
-	if newMgr.Workers() != 6 {
-		t.Errorf("Expected 6 workers, got %d", newMgr.Workers())
+	if updatedMgr.GetConfig().ExecutorWorkers != 6 {
+		t.Errorf("Expected 6 workers, got %d", updatedMgr.GetConfig().ExecutorWorkers)
 	}
 
-	config := newMgr.GetMicrotaskConfig()
-	if config.BufferSize != 1500 {
-		t.Errorf("Expected BufferSize 1500, got %d", config.BufferSize)
+	config := updatedMgr.GetConfig()
+	if config.MicrotaskQueueSize != 1500 {
+		t.Errorf("Expected MicrotaskQueueSize 1500, got %d", config.MicrotaskQueueSize)
 	}
-	if config.WorkerCount != 3 {
-		t.Errorf("Expected WorkerCount 3, got %d", config.WorkerCount)
+	if config.MicrotaskWorkers != 3 {
+		t.Errorf("Expected MicrotaskWorkers 3, got %d", config.MicrotaskWorkers)
 	}
 }
 
@@ -932,7 +940,7 @@ func TestRetryWithContextImmediateSuccess(t *testing.T) {
 // TestNewWithMgrPanicHandling tests panic handling in NewWithMgr executor
 func TestNewWithMgrPanicHandling(t *testing.T) {
 	t.Run("Error panic in executor", func(t *testing.T) {
-		manager := NewPromiseMgr(1)
+		manager := NewPromiseMgr()
 		defer manager.Close()
 
 		promise := NewWithMgr(manager, func(resolve func(string), reject func(error)) {
@@ -958,7 +966,7 @@ func TestNewWithMgrPanicHandling(t *testing.T) {
 	})
 
 	t.Run("Non-error panic in executor", func(t *testing.T) {
-		manager := NewPromiseMgr(1)
+		manager := NewPromiseMgr()
 		defer manager.Close()
 
 		promise := NewWithMgr(manager, func(resolve func(string), reject func(error)) {
@@ -989,7 +997,7 @@ func TestNewWithMgrPanicHandling(t *testing.T) {
 
 // TestPromiseCreationAfterManagerShutdown tests that Promise creation fails gracefully when manager is shutdown
 func TestPromiseCreationAfterManagerShutdown(t *testing.T) {
-	manager := NewPromiseMgr(1)
+	manager := NewPromiseMgr()
 
 	// Close the manager first
 	manager.Close()
@@ -1109,7 +1117,7 @@ func TestWithResolvers(t *testing.T) {
 // TestWithResolversWithMgr tests the WithResolversWithMgr function
 func TestWithResolversWithMgr(t *testing.T) {
 	t.Run("With custom manager", func(t *testing.T) {
-		manager := NewPromiseMgr(1)
+		manager := NewPromiseMgr()
 		defer manager.Close()
 
 		promise, resolve, _ := WithResolversWithMgr[string](manager)
@@ -1130,7 +1138,7 @@ func TestWithResolversWithMgr(t *testing.T) {
 	})
 
 	t.Run("With shutdown manager", func(t *testing.T) {
-		manager := NewPromiseMgr(1)
+		manager := NewPromiseMgr()
 		manager.Close()
 
 		promise, resolve, _ := WithResolversWithMgr[string](manager)

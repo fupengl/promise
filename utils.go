@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// Resolve creates a resolved Promise
 func Resolve[T any](value T) *Promise[T] {
 	p := &Promise[T]{
 		done: make(chan struct{}),
@@ -18,7 +17,6 @@ func Resolve[T any](value T) *Promise[T] {
 	return p
 }
 
-// Reject creates a rejected Promise
 func Reject[T any](err error) *Promise[T] {
 	p := &Promise[T]{
 		done: make(chan struct{}),
@@ -31,7 +29,6 @@ func Reject[T any](err error) *Promise[T] {
 	return p
 }
 
-// Delay creates a Promise that resolves after a delay
 func Delay[T any](value T, delay time.Duration) *Promise[T] {
 	return New(func(resolve func(T), reject func(error)) {
 		time.Sleep(delay)

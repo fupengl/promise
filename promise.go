@@ -6,29 +6,25 @@ import (
 	"fmt"
 )
 
-// New creates a new Promise using the default manager
+// New creates a Promise using the default manager
 func New[T any](executor func(resolve func(T), reject func(error))) *Promise[T] {
 	return NewWithMgr(GetDefaultMgr(), executor)
 }
 
-// WithResolvers creates a Promise and returns resolve/reject functions for external control
-// Similar to JavaScript's Promise.withResolvers()
+// WithResolvers creates a Promise and returns resolve/reject functions
 func WithResolvers[T any]() (*Promise[T], func(T), func(error)) {
 	return WithResolversWithMgr[T](GetDefaultMgr())
 }
 
-// WithResolversWithMgr creates a Promise with specified manager and returns resolve/reject functions
+// WithResolversWithMgr creates a Promise with specified manager
 func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), func(error)) {
 	p := &Promise[T]{
 		manager: manager,
 	}
 
-	// Initialize atomic values
 	p.state.Store(Pending)
 
-	// Check if manager is shutdown
 	if manager.IsShutdown() {
-		// Manager is shutdown, reject the promise immediately
 		p.reject(&PromiseError{
 			Message: "Promise creation failed: manager is shutdown",
 			Cause:   errors.New("manager is shutdown"),
@@ -37,23 +33,18 @@ func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), fun
 		return p, p.resolve, p.reject
 	}
 
-	// Return the promise and control functions
 	return p, p.resolve, p.reject
 }
 
-// NewWithManager creates a new Promise using the specified manager
+// NewWithMgr creates a Promise using the specified manager
 func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), reject func(error))) *Promise[T] {
 	p := &Promise[T]{
 		manager: manager,
 	}
 
-	// Initialize atomic values
 	p.state.Store(Pending)
-	// handlers remain lazy initialized, only created when Then is called
 
-	// Check if manager is shutdown before scheduling
 	if manager.IsShutdown() {
-		// Manager is shutdown, reject the promise immediately
 		p.reject(&PromiseError{
 			Message: "Promise creation failed: manager is shutdown",
 			Cause:   errors.New("manager is shutdown"),
@@ -62,21 +53,18 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 		return p
 	}
 
-	// Execute executor asynchronously using the manager
-	manager.scheduleExecutor(func() {
+	if err := manager.scheduleExecutor(func() {
 		defer func() {
 			if r := recover(); r != nil {
 				var panicErr error
 				if err, ok := r.(error); ok {
-					// Use helper function to avoid double wrapping
 					panicErr = wrapErrorIfNeeded(err, "panic in executor", PanicError)
 				} else {
-					// Wrap non-error panic as PromiseError
 					panicErr = &PromiseError{
 						Message: fmt.Sprintf("panic in executor: %v", r),
 						Cause:   nil,
 						Type:    PanicError,
-						Value:   r, // Preserve original panic value
+						Value:   r,
 					}
 				}
 				p.reject(panicErr)
@@ -84,7 +72,13 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 		}()
 
 		executor(p.resolve, p.reject)
-	})
+	}); err != nil {
+		p.reject(&PromiseError{
+			Message: "failed to schedule executor",
+			Cause:   err,
+			Type:    RejectionError,
+		})
+	}
 
 	return p
 }
@@ -101,14 +95,11 @@ func (p *Promise[T]) resolve(value T) {
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
-	// Check if channel is already closed to prevent panic
 	select {
 	case <-p.done:
-		// Channel already closed, do nothing
 		p.mu.Unlock()
 		return
 	default:
-		// Channel not closed, safe to close
 		close(p.done)
 	}
 
@@ -116,17 +107,15 @@ func (p *Promise[T]) resolve(value T) {
 	p.handlers = nil
 	p.mu.Unlock()
 
-	if handlers != nil {
-		for _, h := range handlers {
-			if h.onFulfilled != nil {
-				handler := h.onFulfilled
-				next := h.next
-				val := value
+	for _, h := range handlers {
+		if h.onFulfilled != nil {
+			handler := h.onFulfilled
+			next := h.next
+			val := value
 
-				p.manager.scheduleMicrotask(func() {
-					safeCallback(handler, val, next)
-				})
-			}
+			p.manager.scheduleMicrotask(func() {
+				safeCallback(handler, val, next)
+			})
 		}
 	}
 }
@@ -137,23 +126,18 @@ func (p *Promise[T]) reject(err error) {
 		return
 	}
 
-	// Use helper function to avoid double wrapping
 	finalErr := wrapErrorIfNeeded(err, "Promise rejected", RejectionError)
-
 	p.setError(finalErr)
 
 	p.mu.Lock()
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
-	// Check if channel is already closed to prevent panic
 	select {
 	case <-p.done:
-		// Channel already closed, do nothing
 		p.mu.Unlock()
 		return
 	default:
-		// Channel not closed, safe to close
 		close(p.done)
 	}
 
@@ -161,32 +145,29 @@ func (p *Promise[T]) reject(err error) {
 	p.handlers = nil
 	p.mu.Unlock()
 
-	if handlers != nil {
-		for _, h := range handlers {
-			if h.onRejected != nil {
-				handler := h.onRejected
-				next := h.next
-				errVal := finalErr
+	for _, h := range handlers {
+		if h.onRejected != nil {
+			handler := h.onRejected
+			next := h.next
+			errVal := finalErr
 
-				p.manager.scheduleMicrotask(func() {
-					safeErrorCallback(handler, errVal, next)
-				})
-			} else if h.next != nil {
-				next := h.next
-				errVal := finalErr
+			p.manager.scheduleMicrotask(func() {
+				safeErrorCallback(handler, errVal, next)
+			})
+		} else if h.next != nil {
+			next := h.next
+			errVal := finalErr
 
-				p.manager.scheduleMicrotask(func() {
-					next.reject(errVal)
-				})
-			}
+			p.manager.scheduleMicrotask(func() {
+				next.reject(errVal)
+			})
 		}
 	}
 }
 
-// Then adds fulfilled and rejected handlers
 func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *Promise[any] {
 	next := &Promise[any]{
-		done:    make(chan struct{}),
+		done:    nil,
 		manager: p.manager,
 	}
 
@@ -238,21 +219,18 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 	return next
 }
 
-// Catch adds a rejected handler
 func (p *Promise[T]) Catch(onRejected func(error) any) *Promise[any] {
 	return p.Then(nil, onRejected)
 }
 
-// Finally adds a finally handler
 func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	next := &Promise[T]{
-		done:    make(chan struct{}),
+		done:    nil,
 		manager: p.manager,
 	}
 
 	next.state.Store(Pending)
 
-	// Create a handler that will execute the finally callback
 	h := &handler[T]{
 		onFulfilled: func(value T) any {
 			safeFinallyCallback(onFinally, next, value, nil)
@@ -263,15 +241,13 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 			safeFinallyCallback(onFinally, next, value, err)
 			return nil
 		},
-		next: nil, // No need to chain to another promise
+		next: nil,
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// If Promise is already completed, execute handlers using microtask queue
 	if p.getState() == Fulfilled {
-		// Capture values to avoid race conditions
 		handler := h.onFulfilled
 		val, _ := p.getValue()
 
@@ -279,7 +255,6 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 			handler(val)
 		})
 	} else if p.getState() == Rejected {
-		// Capture values to avoid race conditions
 		handler := h.onRejected
 		errVal, _ := p.getError()
 
@@ -287,8 +262,6 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 			handler(errVal)
 		})
 	} else {
-		// Promise is still pending, add handler
-		// Lazy initialize handlers slice
 		if p.handlers == nil {
 			p.handlers = make([]*handler[T], 0, 2)
 		}
@@ -298,14 +271,15 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	return next
 }
 
-// Await waits for Promise completion and returns result
 func (p *Promise[T]) Await() (T, error) {
+	p.mu.Lock()
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
+	done := p.done
+	p.mu.Unlock()
 
-	// Wait for completion signal instead of polling
-	<-p.done
+	<-done
 
 	if p.getState() == Fulfilled {
 		value, _ := p.getValue()
@@ -316,18 +290,20 @@ func (p *Promise[T]) Await() (T, error) {
 	return zero, err
 }
 
-// AwaitWithContext waits for Promise completion using context
+// AwaitWithContext waits for Promise completion with context
 func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
+	p.mu.Lock()
 	if p.done == nil {
 		p.done = make(chan struct{})
 	}
+	done := p.done
+	p.mu.Unlock()
 
 	select {
 	case <-ctx.Done():
 		var zero T
 		return zero, ctx.Err()
-	case <-p.done:
-		// Promise completed
+	case <-done:
 	}
 
 	if p.getState() == Fulfilled {
@@ -344,7 +320,7 @@ func (p *Promise[T]) State() State {
 	return p.getState()
 }
 
-// IsPending checks if Promise is in pending state
+// IsPending checks if Promise is pending
 func (p *Promise[T]) IsPending() bool {
 	return p.State() == Pending
 }
@@ -359,7 +335,7 @@ func (p *Promise[T]) IsRejected() bool {
 	return p.State() == Rejected
 }
 
-// safeCallback wraps a callback function with panic recovery
+// safeCallback wraps callback with panic recovery
 func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 	if next == nil {
 		callback(value)
@@ -370,14 +346,12 @@ func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 		if r := recover(); r != nil {
 			var err error
 			if e, ok := r.(error); ok {
-				// Wrap original error, preserve context
 				err = &PromiseError{
 					Message: "panic in fulfilled callback",
 					Cause:   e,
 					Type:    PanicError,
 				}
 			} else {
-				// Non-error panic, wrap as error but preserve original value
 				err = &PromiseError{
 					Message: fmt.Sprintf("panic in fulfilled callback: %v", r),
 					Cause:   nil,
@@ -393,7 +367,7 @@ func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 	next.resolve(result)
 }
 
-// safeErrorCallback wraps an error callback function with panic recovery
+// safeErrorCallback wraps error callback with panic recovery
 func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) {
 	if next == nil {
 		callback(err)
@@ -429,7 +403,7 @@ func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) 
 	next.resolve(result)
 }
 
-// safeFinallyCallback wraps a finally callback function with panic recovery
+// safeFinallyCallback wraps finally callback with panic recovery
 func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err error) {
 	if next == nil {
 		callback()

@@ -206,18 +206,17 @@ func ExampleReduce() {
 }
 func ExamplePromiseMgr_SetMicrotaskConfig() {
 	// Method 1: Configure microtask through global manager
-	GetDefaultMgr().SetMicrotaskConfig(&MicrotaskConfig{
-		BufferSize:  3000,
-		WorkerCount: 6,
-	})
+	GetDefaultMgr().SetMicrotaskConfig(6, 3000)
 
 	// Method 2: Configure executor worker count through global manager
-	GetDefaultMgr().SetExecutorWorker(8)
+	GetDefaultMgr().SetExecutorConfig(8, 32)
 
 	// Method 3: Create custom manager
-	customMgr := NewPromiseMgrWithConfig(4, &MicrotaskConfig{
-		BufferSize:  1000,
-		WorkerCount: 2,
+	customMgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+		ExecutorWorkers:    4,
+		ExecutorQueueSize:  16,
+		MicrotaskWorkers:   2,
+		MicrotaskQueueSize: 1000,
 	})
 
 	// Create Promise using custom manager
@@ -230,8 +229,8 @@ func ExamplePromiseMgr_SetMicrotaskConfig() {
 		resolve("Hello from global manager!")
 	})
 
-	fmt.Printf("Custom manager workers: %d\n", customMgr.Workers())
-	fmt.Printf("Global manager workers: %d\n", GetDefaultMgr().Workers())
+	fmt.Printf("Custom manager workers: %d\n", customMgr.GetConfig().ExecutorWorkers)
+	fmt.Printf("Global manager workers: %d\n", GetDefaultMgr().GetConfig().ExecutorWorkers)
 
 	// Wait for Promise completion
 	result1, _ := p.Await()
@@ -246,14 +245,18 @@ func ExamplePromiseMgr_SetMicrotaskConfig() {
 
 func ExampleNewPromiseMgrWithConfig() {
 	// Create two different managers with different configurations
-	mgr1 := NewPromiseMgrWithConfig(2, &MicrotaskConfig{
-		BufferSize:  500,
-		WorkerCount: 1,
+	mgr1 := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+		ExecutorWorkers:    2,
+		ExecutorQueueSize:  8,
+		MicrotaskWorkers:   1,
+		MicrotaskQueueSize: 500,
 	})
 
-	mgr2 := NewPromiseMgrWithConfig(4, &MicrotaskConfig{
-		BufferSize:  2000,
-		WorkerCount: 3,
+	mgr2 := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+		ExecutorWorkers:    4,
+		ExecutorQueueSize:  16,
+		MicrotaskWorkers:   3,
+		MicrotaskQueueSize: 2000,
 	})
 
 	// Create Promises using different managers
@@ -282,22 +285,20 @@ func ExampleNewPromiseMgrWithConfig() {
 func ExampleGetDefaultMgr() {
 	// Get current default manager
 	currentMgr := GetDefaultMgr()
-	fmt.Printf("Current workers: %d\n", currentMgr.Workers())
+	fmt.Printf("Current workers: %d\n", currentMgr.GetConfig().ExecutorWorkers)
 
 	// Reset default manager configuration
-	ResetDefaultMgr(8, &MicrotaskConfig{
-		BufferSize:  3000,
-		WorkerCount: 4,
-	})
+	ResetDefaultMgrExecutor(8, 32)
+	ResetDefaultMgrMicrotask(4, 3000)
 
 	// Get new default manager
 	newMgr := GetDefaultMgr()
-	fmt.Printf("New workers: %d\n", newMgr.Workers())
+	fmt.Printf("New workers: %d\n", newMgr.GetConfig().ExecutorWorkers)
 
 	// Verify configuration has been updated
-	config := newMgr.GetMicrotaskConfig()
-	fmt.Printf("New buffer size: %d\n", config.BufferSize)
-	fmt.Printf("New worker count: %d\n", config.WorkerCount)
+	config := newMgr.GetConfig()
+	fmt.Printf("New microtask workers: %d\n", config.MicrotaskWorkers)
+	fmt.Printf("New executor workers: %d\n", config.ExecutorWorkers)
 }
 
 // ExampleWithResolvers demonstrates the WithResolvers function
@@ -321,7 +322,7 @@ func ExampleWithResolvers() {
 // ExampleWithResolversWithMgr demonstrates the WithResolversWithMgr function
 func ExampleWithResolversWithMgr() {
 	// Create custom manager
-	manager := NewPromiseMgr(2)
+	manager := NewPromiseMgr()
 	defer manager.Close()
 
 	// Create a Promise with external control using custom manager
@@ -397,7 +398,7 @@ func ExampleTryWithError() {
 // ExampleTryWithMgr demonstrates usage of TryWithMgr with custom manager
 func ExampleTryWithMgr() {
 	// Create a custom manager
-	manager := NewPromiseMgr(2)
+	manager := NewPromiseMgr()
 	defer manager.Close()
 
 	// Use TryWithMgr with custom manager
@@ -417,7 +418,7 @@ func ExampleTryWithMgr() {
 // ExampleTryWithErrorAndMgr demonstrates usage of TryWithErrorAndMgr
 func ExampleTryWithErrorAndMgr() {
 	// Create a custom manager
-	manager := NewPromiseMgr(2)
+	manager := NewPromiseMgr()
 	defer manager.Close()
 
 	// Use TryWithErrorAndMgr with custom manager

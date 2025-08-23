@@ -17,6 +17,7 @@ A high-performance, type-safe Go Promise library inspired by JavaScript Promises
 - 🎯 **Zero Dependencies**: Pure Go implementation, no external dependencies
 - 🎛️ **Flexible Configuration**: Support global and custom Promise managers
 - 🔧 **Resource Isolation**: Different managers don't affect each other, support independent configuration
+- 🚦 **Concurrency Safe**: Fixed all data race issues, thread-safe operations
 
 ## 📦 Installation
 
@@ -196,44 +197,52 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 
 ### Test Environment
 - **CPU**: Apple M2 Max
-- **Go Version**: 1.21.4
+- **Go Version**: 1.24.2
 - **Test Command**: `go test -bench=. -benchmem`
 
 ### Benchmark Results
 
 ```
-BenchmarkPromiseCreation-12              1978914               618.2 ns/op           448 B/op          8 allocs/op
-BenchmarkPromiseThen-12                  3443774               359.6 ns/op           336 B/op          7 allocs/op
-BenchmarkPromiseAwait-12                89638920                12.91 ns/op            0 B/op          0 allocs/op
-BenchmarkMicrotaskQueue-12               8970466               134.7 ns/op            24 B/op          2 allocs/op
-BenchmarkPromiseChain-12                  170878             10079 ns/op            4066 B/op         72 allocs/op
-BenchmarkSimplePromiseChain-12            381231              6209 ns/op            2472 B/op         42 allocs/op
-BenchmarkWithResolvers-12                6140624               195.3 ns/op           288 B/op          5 allocs/op
-BenchmarkWithResolversWithMgr-12         6223452               191.9 ns/op           288 B/op          5 allocs/op
-BenchmarkResolveMultipleTimes-12         4420789               272.0 ns/op           320 B/op          7 allocs/op
-BenchmarkRejectMultipleTimes-12          3111844               383.4 ns/op           560 B/op         10 allocs/op
+BenchmarkPromiseCreation-12              1,278,765 ops    1,013 ns/op    437 B/op    7 allocs/op
+BenchmarkPromiseThen-12                  1,918,182 ops      633.1 ns/op    448 B/op    7 allocs/op
+BenchmarkPromiseAwait-12                39,064,831 ops      32.87 ns/op      0 B/op    0 allocs/op
+BenchmarkMicrotaskQueue-12               3,176,100 ops      370.3 ns/op    134 B/op    2 allocs/op
+BenchmarkPromiseChain-12                   171,643 ops   13,399 ns/op    5,096 B/op   72 allocs/op
+BenchmarkSimplePromiseChain-12             279,733 ops    6,951 ns/op    2,975 B/op   42 allocs/op
+BenchmarkWithResolvers-12                5,637,927 ops      213.1 ns/op    288 B/op    5 allocs/op
+BenchmarkWithResolversWithMgr-12         5,736,646 ops      209.4 ns/op    288 B/op    5 allocs/op
+BenchmarkResolveMultipleTimes-12         4,016,504 ops      298.4 ns/op    320 B/op    7 allocs/op
+BenchmarkRejectMultipleTimes-12          2,891,620 ops      410.3 ns/op    560 B/op   10 allocs/op
+BenchmarkMemoryAllocation-12               517,053 ops    2,842 ns/op    1,417 B/op  21 allocs/op
+BenchmarkConcurrentPromiseCreation-12     1,000,000 ops    1,201 ns/op      416 B/op    6 allocs/op
+BenchmarkTaskPoolReuse-12                1,609,479 ops      758.4 ns/op    440 B/op    8 allocs/op
 ```
 
 ### Performance Analysis
 
 | Operation | Performance | Memory Allocation | Description |
 |-----------|-------------|-------------------|-------------|
-| **Promise Creation** | 618.2 ns/op | 448 B/op | Basic Promise instance creation |
-| **Then Operation** | 359.6 ns/op | 336 B/op | Adding Then callback |
-| **Promise Await** | 12.91 ns/op | 0 B/op | Promise await completion |
-| **Microtask Scheduling** | 134.7 ns/op | 24 B/op | Microtask queue scheduling |
-| **Long Promise Chain (10)** | 10,079 ns/op | 4,066 B/op | 10-level Promise chaining |
-| **Simple Promise Chain (5)** | 6,209 ns/op | 2,472 B/op | 5-level Promise chaining |
-| **WithResolvers** | 195.3 ns/op | 288 B/op | **Fastest Promise creation method** |
-| **WithResolversWithMgr** | 191.9 ns/op | 288 B/op | **Fastest with custom manager** |
+| **Promise Creation** | 1,013 ns/op | 437 B/op, 7 allocs/op | Basic Promise instance creation |
+| **Then Operation** | 633.1 ns/op | 448 B/op, 7 allocs/op | Adding Then callback |
+| **Promise Await** | 32.87 ns/op | 0 B/op, 0 allocs/op | Promise await completion |
+| **Microtask Scheduling** | 370.3 ns/op | 134 B/op, 2 allocs/op | Microtask queue scheduling |
+| **Long Promise Chain (10)** | 13,399 ns/op | 5,096 B/op, 72 allocs/op | 10-level Promise chaining |
+| **Simple Promise Chain (5)** | 6,951 ns/op | 2,975 B/op, 42 allocs/op | 5-level Promise chaining |
+| **WithResolvers** | 213.1 ns/op | 288 B/op, 5 allocs/op | **Fastest Promise creation method** |
+| **WithResolversWithMgr** | 209.4 ns/op | 288 B/op, 5 allocs/op | **Fastest with custom manager** |
+| **Memory Allocation Test** | 2,842 ns/op | 1,417 B/op, 21 allocs/op | Complex chaining memory usage |
+| **Concurrent Promise Creation** | 1,201 ns/op | 416 B/op, 6 allocs/op | Concurrent creation performance |
+| **Task Pool Reuse** | 758.4 ns/op | 440 B/op, 8 allocs/op | Task object pool reuse effect |
 
 ### Performance Highlights
 
-- ⭐ **Excellent Promise Await Performance**: Only 12.91 nanoseconds, can handle 77 million operations per second
-- ⭐ **Fastest Promise Creation**: WithResolvers achieves 195.3 ns/op, **3.2x faster** than traditional creation
-- ⭐ **Efficient Microtask Scheduling**: 134.7 nanoseconds scheduling time, suitable for high-frequency async operations
-- ⭐ **Optimized Memory Usage**: WithResolvers uses only 288 B/op, **35.7% less memory** than traditional creation
-- ⭐ **Smooth Chaining Operations**: Each Then operation only takes 359.6 nanoseconds
+- ⭐ **Excellent Promise Await Performance**: Only 32.87 nanoseconds, can handle 30 million operations per second
+- ⭐ **Fastest Promise Creation**: WithResolversWithMgr achieves 209.4 ns/op, **4.8x faster** than traditional creation
+- ⭐ **Efficient Microtask Scheduling**: 370.3 nanoseconds scheduling time, suitable for high-frequency async operations
+- ⭐ **Optimized Memory Usage**: WithResolvers uses only 288 B/op, **34.1% less memory** than traditional creation
+- ⭐ **Smooth Chaining Operations**: Each Then operation only takes 633.1 nanoseconds
+- ⭐ **Significant Task Pool Reuse Effect**: Performance improvement of about 1.3x through object pool reuse
+- ⭐ **Excellent Concurrent Performance**: Stable concurrent creation performance, suitable for high-concurrency scenarios
 
 ## 🧪 Testing
 
@@ -255,19 +264,13 @@ go test -v -run Example
 go test -bench=. -benchmem
 ```
 
-## 🔧 Configuration
+### Race Detection Testing
 
-### Microtask Queue Configuration
-
-```go
-import "github.com/fupengl/promise"
-
-// Configure microtask queue
-promise.SetMicrotaskConfig(&promise.MicrotaskConfig{
-    BufferSize:  2000,        // Task buffer size
-    WorkerCount: 8,           // Worker goroutine count
-})
+```bash
+go test -race -v
 ```
+
+## 🔧 Configuration
 
 ### Promise Manager Configuration
 
@@ -275,16 +278,16 @@ promise.SetMicrotaskConfig(&promise.MicrotaskConfig{
 import "github.com/fupengl/promise"
 
 // Method 1: Configure through global manager
-promise.GetDefaultMgr().SetMicrotaskConfig(&promise.MicrotaskConfig{
-    BufferSize:  3000,
-    WorkerCount: 6,
-})
-promise.GetDefaultMgr().SetExecutorWorker(8)
+defaultMgr := promise.GetDefaultMgr()
+defaultMgr.SetMicrotaskConfig(6, 3000)  // workers, queueSize
+defaultMgr.SetExecutorConfig(8, 32)     // workers, queueSize
 
 // Method 2: Create custom manager
-customMgr := promise.NewPromiseMgrWithConfig(4, &promise.MicrotaskConfig{
-    BufferSize:  1000,
-    WorkerCount: 2,
+customMgr := promise.NewPromiseMgrWithConfig(&promise.PromiseMgrConfig{
+    ExecutorWorkers:    4,
+    ExecutorQueueSize:  16,
+    MicrotaskWorkers:   2,
+    MicrotaskQueueSize: 1000,
 })
 
 // Create Promise using custom manager
@@ -302,15 +305,32 @@ defer customMgr.Close()
 // Get global default manager
 defaultMgr := promise.GetDefaultMgr()
 
-// Configure microtask
-defaultMgr.SetMicrotaskConfig(config)
-defaultMgr.GetMicrotaskConfig()
+// Configure microtask (workers, queueSize)
+defaultMgr.SetMicrotaskConfig(6, 3000)
 
-// Configure executor worker count
-defaultMgr.SetExecutorWorker(workers)
+// Configure executor (workers, queueSize)
+defaultMgr.SetExecutorConfig(8, 32)
 
-// Reset default manager
-promise.ResetDefaultMgr(workers, microtaskConfig)
+// Get current configuration
+config := defaultMgr.GetConfig()
+
+// Reset default manager configurations
+promise.ResetDefaultMgrExecutor(6, 24)      // Reset executor only
+promise.ResetDefaultMgrMicrotask(3, 1500)  // Reset microtask only
+```
+
+### Configuration Structure
+
+```go
+type PromiseMgrConfig struct {
+    ExecutorWorkers    int // Number of executor worker goroutines
+    ExecutorQueueSize  int // Size of executor task queue
+    MicrotaskWorkers   int // Number of microtask worker goroutines
+    MicrotaskQueueSize int // Size of microtask queue
+}
+
+// Default configuration (automatically calculated based on CPU cores)
+func DefaultPromiseMgrConfig() *PromiseMgrConfig
 ```
 
 ## 📖 Complete Documentation
