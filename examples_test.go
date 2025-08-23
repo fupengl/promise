@@ -358,3 +358,78 @@ func ExamplePromisify() {
 	fmt.Println(result)
 	// Output: data from database
 }
+
+// ExampleTry demonstrates basic usage of Try
+func ExampleTry() {
+	// Basic usage
+	promise := Try(func() string {
+		return "Hello, World!"
+	})
+
+	result, err := promise.Await()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Println(result)
+	// Output: Hello, World!
+}
+
+// ExampleTryWithError demonstrates usage of TryWithError
+func ExampleTryWithError() {
+	// With Go's standard error pattern
+	promise := TryWithError(func() (int, error) {
+		// Simulate some operation that might fail
+		if time.Now().Second()%2 == 0 {
+			return 42, nil
+		}
+		return 0, errors.New("operation failed")
+	})
+
+	result, err := promise.Await()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Printf("Result: %d\n", result)
+}
+
+// ExampleTryWithMgr demonstrates usage of TryWithMgr with custom manager
+func ExampleTryWithMgr() {
+	// Create a custom manager
+	manager := NewPromiseMgr(2)
+	defer manager.Close()
+
+	// Use TryWithMgr with custom manager
+	promise := TryWithMgr(manager, func() string {
+		return "Hello from custom manager!"
+	})
+
+	result, err := promise.Await()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Println(result)
+	// Output: Hello from custom manager!
+}
+
+// ExampleTryWithErrorAndMgr demonstrates usage of TryWithErrorAndMgr
+func ExampleTryWithErrorAndMgr() {
+	// Create a custom manager
+	manager := NewPromiseMgr(2)
+	defer manager.Close()
+
+	// Use TryWithErrorAndMgr with custom manager
+	promise := TryWithErrorAndMgr(manager, func() (string, error) {
+		return "Success with custom manager!", nil
+	})
+
+	result, err := promise.Await()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	fmt.Println(result)
+	// Output: Success with custom manager!
+}

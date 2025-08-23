@@ -1223,3 +1223,114 @@ func TestErrorHandlingOptimization(t *testing.T) {
 		t.Errorf("Expected cause to be original error, but got: %v", promiseErr2.Cause)
 	}
 }
+
+// TestTry tests the Try function
+func TestTry(t *testing.T) {
+	t.Run("Try with successful function", func(t *testing.T) {
+		promise := Try(func() string {
+			return "success"
+		})
+
+		result, err := promise.Await()
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		if result != "success" {
+			t.Errorf("Expected 'success', got %s", result)
+		}
+	})
+
+	t.Run("Try with panic", func(t *testing.T) {
+		promise := Try(func() string {
+			panic("test panic")
+		})
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error for panic, got nil")
+		}
+
+		var promiseErr *PromiseError
+		if !errors.As(err, &promiseErr) {
+			t.Error("Expected PromiseError type")
+		}
+		if promiseErr.Type != PanicError {
+			t.Errorf("Expected PanicError type, got %v", promiseErr.Type)
+		}
+	})
+
+	t.Run("Try with error panic", func(t *testing.T) {
+		testErr := errors.New("test error")
+		promise := Try(func() string {
+			panic(testErr)
+		})
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error for panic, got nil")
+		}
+
+		var promiseErr *PromiseError
+		if !errors.As(err, &promiseErr) {
+			t.Error("Expected PromiseError type")
+		}
+		if promiseErr.Type != PanicError {
+			t.Errorf("Expected PanicError type, got %v", promiseErr.Type)
+		}
+		if promiseErr.Cause != testErr {
+			t.Errorf("Expected cause to be testErr, got %v", promiseErr.Cause)
+		}
+	})
+}
+
+// TestTryWithError tests the TryWithError function
+func TestTryWithError(t *testing.T) {
+	t.Run("TryWithError with successful function", func(t *testing.T) {
+		promise := TryWithError(func() (string, error) {
+			return "success", nil
+		})
+
+		result, err := promise.Await()
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		if result != "success" {
+			t.Errorf("Expected 'success', got %s", result)
+		}
+	})
+
+	t.Run("TryWithError with error return", func(t *testing.T) {
+		testErr := errors.New("test error")
+		promise := TryWithError(func() (string, error) {
+			return "", testErr
+		})
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error, got nil")
+		}
+		// The error might be wrapped, so check if it contains the original error
+		if !errors.Is(err, testErr) && !strings.Contains(err.Error(), testErr.Error()) {
+			t.Errorf("Expected error to contain testErr, got %v", err)
+		}
+	})
+
+	t.Run("TryWithError with panic", func(t *testing.T) {
+		promise := TryWithError(func() (string, error) {
+			panic("test panic")
+		})
+
+		_, err := promise.Await()
+		if err == nil {
+			t.Error("Expected error for panic, got nil")
+		}
+
+		var promiseErr *PromiseError
+		if !errors.As(err, &promiseErr) {
+			t.Error("Expected PromiseError type")
+		}
+		if promiseErr.Type != PanicError {
+			t.Errorf("Expected PanicError type, got %v", promiseErr.Type)
+		}
+	})
+}

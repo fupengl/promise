@@ -187,3 +187,48 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 
 	return Resolve(result)
 }
+
+// Try executes a function and returns a Promise that resolves with the result
+// or rejects with any error/panic that occurs during execution
+// This is similar to Node.js's Promise.try()
+func Try[T any](fn func() T) *Promise[T] {
+	return New(func(resolve func(T), reject func(error)) {
+		result := fn()
+		resolve(result)
+	})
+}
+
+// TryWithMgr executes a function using the specified manager and returns a Promise
+// that resolves with the result or rejects with any error/panic that occurs during execution
+func TryWithMgr[T any](manager *PromiseMgr, fn func() T) *Promise[T] {
+	return NewWithMgr(manager, func(resolve func(T), reject func(error)) {
+		result := fn()
+		resolve(result)
+	})
+}
+
+// TryWithError executes a function that returns (T, error) and returns a Promise
+// This is useful for Go functions that follow the standard (value, error) return pattern
+func TryWithError[T any](fn func() (T, error)) *Promise[T] {
+	return New(func(resolve func(T), reject func(error)) {
+		result, err := fn()
+		if err != nil {
+			reject(err)
+		} else {
+			resolve(result)
+		}
+	})
+}
+
+// TryWithErrorAndMgr executes a function that returns (T, error) using the specified manager
+// and returns a Promise. This is useful for Go functions that follow the standard (value, error) return pattern
+func TryWithErrorAndMgr[T any](manager *PromiseMgr, fn func() (T, error)) *Promise[T] {
+	return NewWithMgr(manager, func(resolve func(T), reject func(error)) {
+		result, err := fn()
+		if err != nil {
+			reject(err)
+		} else {
+			resolve(result)
+		}
+	})
+}
