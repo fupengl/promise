@@ -131,23 +131,32 @@ func Any[T any](promises ...*Promise[T]) *Promise[T] {
 		}
 
 		errs := make([]error, len(promises))
-		completed := 0
+		var completed int32
+		var hasSuccess int32
+		var mu sync.Mutex
 
 		for i, p := range promises {
 			go func(index int, promise *Promise[T]) {
 				value, err := promise.Await()
 
 				if err == nil {
-					// Success, resolve immediately
-					resolve(value)
+					// Success, resolve immediately if not already resolved
+					if atomic.CompareAndSwapInt32(&hasSuccess, 0, 1) {
+						resolve(value)
+					}
 					return
 				}
 
+				// Use mutex to protect errs array access
+				mu.Lock()
 				errs[index] = err
-				completed++
+				mu.Unlock()
 
-				// If all Promises failed
-				if completed == len(promises) {
+				// Increment completed counter atomically
+				newCompleted := atomic.AddInt32(&completed, 1)
+
+				// If all Promises failed and no success yet
+				if newCompleted == int32(len(promises)) && atomic.LoadInt32(&hasSuccess) == 0 {
 					reject(errors.New("all promises rejected"))
 				}
 			}(i, p)
