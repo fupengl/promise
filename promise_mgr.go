@@ -105,6 +105,10 @@ func (m *PromiseMgr) SetMicrotaskConfig(workers int, queueSize int) *PromiseMgr 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.microtaskPool != nil {
+		m.microtaskPool.Close()
+	}
+
 	m.config.MicrotaskWorkers = workers
 	m.config.MicrotaskQueueSize = queueSize
 	m.microtaskPool = newTaskPool(&taskPoolConfig{
@@ -131,6 +135,10 @@ func (m *PromiseMgr) SetExecutorConfig(workers int, queueSize int) *PromiseMgr {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.executorPool != nil {
+		m.executorPool.Close()
+	}
 
 	m.config.ExecutorWorkers = workers
 	m.config.ExecutorQueueSize = queueSize

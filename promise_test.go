@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+// TestMain provides setup and teardown for the entire test suite
+func TestMain(m *testing.M) {
+	mgr := GetDefaultMgr()
+
+	// Run tests
+	code := m.Run()
+
+	mgr.Close()
+
+	if code != 0 {
+		panic(fmt.Sprintf("Tests failed with code %d", code))
+	}
+}
+
 // Simulate async operation for testing
 func asyncTask(id int, delay time.Duration, shouldFail bool) *Promise[string] {
 	return New(func(resolve func(string), reject func(error)) {
