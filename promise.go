@@ -20,6 +20,7 @@ func WithResolvers[T any]() (*Promise[T], func(T), func(error)) {
 func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), func(error)) {
 	p := &Promise[T]{
 		manager: manager,
+		done:    make(chan struct{}),
 	}
 
 	p.state.Store(Pending)
@@ -40,6 +41,7 @@ func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), fun
 func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), reject func(error))) *Promise[T] {
 	p := &Promise[T]{
 		manager: manager,
+		done:    make(chan struct{}),
 	}
 
 	p.state.Store(Pending)
@@ -83,7 +85,6 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 	return p
 }
 
-// resolve fulfills the Promise
 func (p *Promise[T]) resolve(value T) {
 	if !p.setState(Fulfilled) {
 		return
@@ -92,9 +93,6 @@ func (p *Promise[T]) resolve(value T) {
 	p.setValue(value)
 
 	p.mu.Lock()
-	if p.done == nil {
-		p.done = make(chan struct{})
-	}
 	select {
 	case <-p.done:
 		p.mu.Unlock()
@@ -120,7 +118,6 @@ func (p *Promise[T]) resolve(value T) {
 	}
 }
 
-// reject rejects the Promise
 func (p *Promise[T]) reject(err error) {
 	if !p.setState(Rejected) {
 		return
@@ -130,9 +127,6 @@ func (p *Promise[T]) reject(err error) {
 	p.setError(finalErr)
 
 	p.mu.Lock()
-	if p.done == nil {
-		p.done = make(chan struct{})
-	}
 	select {
 	case <-p.done:
 		p.mu.Unlock()
@@ -167,7 +161,7 @@ func (p *Promise[T]) reject(err error) {
 
 func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *Promise[any] {
 	next := &Promise[any]{
-		done:    nil,
+		done:    make(chan struct{}),
 		manager: p.manager,
 	}
 
@@ -225,7 +219,7 @@ func (p *Promise[T]) Catch(onRejected func(error) any) *Promise[any] {
 
 func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 	next := &Promise[T]{
-		done:    nil,
+		done:    make(chan struct{}),
 		manager: p.manager,
 	}
 
@@ -272,30 +266,62 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 }
 
 func (p *Promise[T]) Await() (T, error) {
-	p.mu.Lock()
-	if p.done == nil {
-		p.done = make(chan struct{})
+	state := p.getState()
+	if state == Fulfilled {
+		if value, ok := p.getValue(); ok {
+			return value, nil
+		}
 	}
+	if state == Rejected {
+		if err, ok := p.getError(); ok {
+			var zero T
+			return zero, err
+		}
+	}
+
+	p.mu.Lock()
 	done := p.done
 	p.mu.Unlock()
 
 	<-done
 
-	if p.getState() == Fulfilled {
-		value, _ := p.getValue()
-		return value, nil
+	state = p.getState()
+	if state == Fulfilled {
+		if value, ok := p.getValue(); ok {
+			return value, nil
+		}
+		var zero T
+		return zero, &PromiseError{
+			Message: "Promise fulfilled but value not available",
+			Type:    RejectionError,
+		}
 	}
+
 	var zero T
-	err, _ := p.getError()
-	return zero, err
+	if err, ok := p.getError(); ok {
+		return zero, err
+	}
+	return zero, &PromiseError{
+		Message: "Promise rejected but error not available",
+		Type:    RejectionError,
+	}
 }
 
-// AwaitWithContext waits for Promise completion with context
 func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
-	p.mu.Lock()
-	if p.done == nil {
-		p.done = make(chan struct{})
+	state := p.getState()
+	if state == Fulfilled {
+		if value, ok := p.getValue(); ok {
+			return value, nil
+		}
 	}
+	if state == Rejected {
+		if err, ok := p.getError(); ok {
+			var zero T
+			return zero, err
+		}
+	}
+
+	p.mu.Lock()
 	done := p.done
 	p.mu.Unlock()
 
@@ -306,36 +332,44 @@ func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
 	case <-done:
 	}
 
-	if p.getState() == Fulfilled {
-		value, _ := p.getValue()
-		return value, nil
+	state = p.getState()
+	if state == Fulfilled {
+		if value, ok := p.getValue(); ok {
+			return value, nil
+		}
+		var zero T
+		return zero, &PromiseError{
+			Message: "Promise fulfilled but value not available",
+			Type:    RejectionError,
+		}
 	}
+
 	var zero T
-	err, _ := p.getError()
-	return zero, err
+	if err, ok := p.getError(); ok {
+		return zero, err
+	}
+	return zero, &PromiseError{
+		Message: "Promise rejected but error not available",
+		Type:    RejectionError,
+	}
 }
 
-// State gets the Promise state
 func (p *Promise[T]) State() State {
 	return p.getState()
 }
 
-// IsPending checks if Promise is pending
 func (p *Promise[T]) IsPending() bool {
 	return p.State() == Pending
 }
 
-// IsFulfilled checks if Promise is fulfilled
 func (p *Promise[T]) IsFulfilled() bool {
 	return p.State() == Fulfilled
 }
 
-// IsRejected checks if Promise is rejected
 func (p *Promise[T]) IsRejected() bool {
 	return p.State() == Rejected
 }
 
-// safeCallback wraps callback with panic recovery
 func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 	if next == nil {
 		callback(value)
@@ -367,7 +401,6 @@ func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 	next.resolve(result)
 }
 
-// safeErrorCallback wraps error callback with panic recovery
 func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) {
 	if next == nil {
 		callback(err)
@@ -378,21 +411,19 @@ func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) 
 		if r := recover(); r != nil {
 			var panicErr error
 			if e, ok := r.(error); ok {
-				// Wrap original error, preserve context
 				panicErr = &PromiseError{
 					Message:       "panic in error callback",
 					Cause:         e,
 					Type:          PanicError,
-					OriginalError: err, // Preserve original error being processed
+					OriginalError: err,
 				}
 			} else {
-				// Non-error panic, wrap as error but preserve original value
 				panicErr = &PromiseError{
 					Message:       fmt.Sprintf("panic in error callback: %v", r),
 					Cause:         nil,
 					Type:          PanicError,
 					Value:         r,
-					OriginalError: err, // Preserve original error being processed
+					OriginalError: err,
 				}
 			}
 			next.reject(panicErr)
@@ -403,7 +434,6 @@ func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) 
 	next.resolve(result)
 }
 
-// safeFinallyCallback wraps finally callback with panic recovery
 func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err error) {
 	if next == nil {
 		callback()
@@ -414,28 +444,25 @@ func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err 
 		if r := recover(); r != nil {
 			var panicErr error
 			if e, ok := r.(error); ok {
-				// Wrap original error, preserve context
 				panicErr = &PromiseError{
 					Message:       "panic in finally callback",
 					Cause:         e,
 					Type:          PanicError,
-					OriginalError: err, // Preserve original error (if any)
+					OriginalError: err,
 				}
 			} else {
-				// Non-error panic, wrap as error but preserve original value
 				panicErr = &PromiseError{
 					Message:       fmt.Sprintf("panic in finally callback: %v", r),
 					Cause:         nil,
 					Type:          PanicError,
 					Value:         r,
-					OriginalError: err, // Preserve original error (if any)
+					OriginalError: err,
 				}
 			}
 			next.reject(panicErr)
 			return
 		}
 
-		// Finally callback completed successfully, resolve with original value
 		if err == nil {
 			next.resolve(value)
 		} else {

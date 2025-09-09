@@ -7,7 +7,8 @@ import (
 
 func Resolve[T any](value T) *Promise[T] {
 	p := &Promise[T]{
-		done: make(chan struct{}),
+		done:    make(chan struct{}),
+		manager: GetDefaultMgr(),
 	}
 
 	// Use helper functions to set state and value atomically
@@ -19,7 +20,8 @@ func Resolve[T any](value T) *Promise[T] {
 
 func Reject[T any](err error) *Promise[T] {
 	p := &Promise[T]{
-		done: make(chan struct{}),
+		done:    make(chan struct{}),
+		manager: GetDefaultMgr(),
 	}
 
 	// Use helper functions to set state and error atomically

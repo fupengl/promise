@@ -118,13 +118,7 @@ func (p *Promise[T]) setState(state State) bool {
 	}
 
 	// Now try to transition from Pending to target state
-	if p.state.CompareAndSwap(Pending, state) {
-		return true
-	}
-
-	// If transition failed, check current state
-	currentState := p.state.Load().(State)
-	return currentState == state // Return true if already in target state
+	return p.state.CompareAndSwap(Pending, state)
 }
 
 // Helper function: safely get value

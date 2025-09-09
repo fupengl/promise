@@ -12,12 +12,13 @@ import (
 
 // TestMain provides setup and teardown for the entire test suite
 func TestMain(m *testing.M) {
-	mgr := GetDefaultMgr()
-
 	// Run tests
 	code := m.Run()
 
-	mgr.Close()
+	// Cleanup: close the current default manager and wait for shutdown
+	currentMgr := GetDefaultMgr()
+	currentMgr.Close()
+	currentMgr.WaitForShutdown()
 
 	if code != 0 {
 		panic(fmt.Sprintf("Tests failed with code %d", code))
@@ -1086,15 +1087,11 @@ func TestWithResolvers(t *testing.T) {
 	t.Run("Multiple resolves should only take first", func(t *testing.T) {
 		promise, resolve, _ := WithResolvers[string]()
 
-		// Multiple resolves
-		go func() {
-			time.Sleep(5 * time.Millisecond)
-			resolve("first")
-		}()
-		go func() {
-			time.Sleep(10 * time.Millisecond)
-			resolve("second")
-		}()
+		// First resolve should succeed
+		resolve("first")
+
+		// Second resolve should be ignored (no effect)
+		resolve("second")
 
 		result, err := promise.Await()
 		if err != nil {
@@ -1108,19 +1105,16 @@ func TestWithResolvers(t *testing.T) {
 	t.Run("Multiple rejects should only take first", func(t *testing.T) {
 		promise, _, reject := WithResolvers[string]()
 
-		// Multiple rejects
-		go func() {
-			time.Sleep(5 * time.Millisecond)
-			reject(errors.New("first reject"))
-		}()
-		go func() {
-			time.Sleep(10 * time.Millisecond)
-			reject(errors.New("second reject"))
-		}()
+		// First reject should succeed
+		reject(errors.New("first reject"))
+
+		// Second reject should be ignored (no effect)
+		reject(errors.New("second reject"))
 
 		_, err := promise.Await()
 		if err == nil {
 			t.Error("Expected error, but got none")
+			return
 		}
 		if !strings.Contains(err.Error(), "first reject") {
 			t.Errorf("Expected error to contain 'first reject', but got: %v", err)
