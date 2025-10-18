@@ -2,6 +2,8 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.21+-blue.svg)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Coverage](https://codecov.io/gh/fupengl/promise/branch/main/graph/badge.svg)](https://codecov.io/gh/fupengl/promise)
+[![Go Report Card](https://goreportcard.com/badge/github.com/fupengl/promise)](https://goreportcard.com/report/github.com/fupengl/promise)
 
 > 🌍 **Multi-language Support**: English | [中文](README_CN.md)
 
