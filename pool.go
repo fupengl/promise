@@ -29,6 +29,7 @@ func getTaskFromPool() *task {
 
 func putTaskToPool(t *task) {
 	t.Executor = nil
+	t.Done = nil
 	taskObjectPool.Put(t)
 }
 
@@ -109,7 +110,14 @@ func (p *taskPool) worker() {
 				task.Executor()
 			}()
 
-			close(task.Done)
+			if task.Done != nil {
+				select {
+				case <-task.Done:
+					// Channel already closed, do nothing
+				default:
+					close(task.Done)
+				}
+			}
 			putTaskToPool(task)
 
 		case <-p.workerCtx.Done():

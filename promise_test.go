@@ -30,7 +30,7 @@ func asyncTask(id int, delay time.Duration, shouldFail bool) *Promise[string] {
 	return New(func(resolve func(string), reject func(error)) {
 		time.Sleep(delay)
 		if shouldFail {
-			reject(errors.New(fmt.Sprintf("task %d failed", id)))
+			reject(fmt.Errorf("task %d failed", id))
 		} else {
 			resolve(fmt.Sprintf("task %d completed", id))
 		}
@@ -1347,6 +1347,280 @@ func TestTryWithError(t *testing.T) {
 		}
 		if promiseErr.Type != PanicError {
 			t.Errorf("Expected PanicError type, got %v", promiseErr.Type)
+		}
+	})
+}
+
+// TestTaskPoolFunctions tests the task pool functions through PromiseMgr
+func TestTaskPoolFunctions(t *testing.T) {
+	t.Run("Test defaultTaskPoolConfig", func(t *testing.T) {
+		// This tests the defaultTaskPoolConfig function indirectly
+		// by creating a PromiseMgr with default config
+		mgr := NewPromiseMgr()
+		if mgr == nil {
+			t.Error("Expected PromiseMgr to be created")
+		}
+		defer mgr.Close()
+
+		// Verify it has reasonable default values
+		config := mgr.GetConfig()
+		if config.ExecutorWorkers <= 0 {
+			t.Errorf("Expected positive executor worker count, got %d", config.ExecutorWorkers)
+		}
+	})
+
+	t.Run("Test SubmitAndWait through PromiseMgr", func(t *testing.T) {
+		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+			ExecutorWorkers:   2,
+			ExecutorQueueSize: 4,
+		})
+		defer mgr.Close()
+
+		// Test successful execution through Promise creation
+		executed := false
+		p := NewWithMgr(mgr, func(resolve func(string), reject func(error)) {
+			executed = true
+			resolve("success")
+		})
+
+		result, err := p.Await()
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		if !executed {
+			t.Error("Expected function to be executed")
+		}
+		if result != "success" {
+			t.Errorf("Expected 'success', got %s", result)
+		}
+	})
+
+	t.Run("Test Workers through PromiseMgr", func(t *testing.T) {
+		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+			ExecutorWorkers:   3,
+			ExecutorQueueSize: 6,
+		})
+		defer mgr.Close()
+
+		config := mgr.GetConfig()
+		if config.ExecutorWorkers != 3 {
+			t.Errorf("Expected 3 executor workers, got %d", config.ExecutorWorkers)
+		}
+	})
+
+	t.Run("Test IsShutdown through PromiseMgr", func(t *testing.T) {
+		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+			ExecutorWorkers:   2,
+			ExecutorQueueSize: 4,
+		})
+
+		// Initially should not be shutdown
+		if mgr.IsShutdown() {
+			t.Error("Expected PromiseMgr to not be shutdown initially")
+		}
+
+		// After close, should be shutdown
+		mgr.Close()
+		if !mgr.IsShutdown() {
+			t.Error("Expected PromiseMgr to be shutdown after close")
+		}
+	})
+
+	t.Run("Test WaitForShutdown through PromiseMgr", func(t *testing.T) {
+		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+			ExecutorWorkers:   2,
+			ExecutorQueueSize: 4,
+		})
+
+		// Submit some tasks through Promise creation
+		for i := 0; i < 5; i++ {
+			p := NewWithMgr(mgr, func(resolve func(string), reject func(error)) {
+				time.Sleep(10 * time.Millisecond)
+				resolve("task completed")
+			})
+			// Don't wait for completion, just create them
+			_ = p
+		}
+
+		// Close the manager
+		mgr.Close()
+
+		// Wait for shutdown should complete
+		done := make(chan bool)
+		go func() {
+			mgr.WaitForShutdown()
+			done <- true
+		}()
+
+		select {
+		case <-done:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Error("WaitForShutdown should complete within 1 second")
+		}
+	})
+
+	t.Run("Test Submit with queue full through PromiseMgr", func(t *testing.T) {
+		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+			ExecutorWorkers:   1,
+			ExecutorQueueSize: 1, // Very small queue
+		})
+		defer mgr.Close()
+
+		// Fill the queue with a long-running task
+		p1 := NewWithMgr(mgr, func(resolve func(string), reject func(error)) {
+			time.Sleep(100 * time.Millisecond)
+			resolve("long task")
+		})
+
+		// This should still work (PromiseMgr handles queue overflow internally)
+		executed := false
+		p2 := NewWithMgr(mgr, func(resolve func(string), reject func(error)) {
+			executed = true
+			resolve("quick task")
+		})
+
+		result1, err1 := p1.Await()
+		result2, err2 := p2.Await()
+
+		if err1 != nil {
+			t.Errorf("Expected no error for p1, got %v", err1)
+		}
+		if err2 != nil {
+			t.Errorf("Expected no error for p2, got %v", err2)
+		}
+		if !executed {
+			t.Error("Expected second function to be executed")
+		}
+		if result1 != "long task" {
+			t.Errorf("Expected 'long task', got %s", result1)
+		}
+		if result2 != "quick task" {
+			t.Errorf("Expected 'quick task', got %s", result2)
+		}
+	})
+
+	t.Run("Test Submit after shutdown through PromiseMgr", func(t *testing.T) {
+		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+			ExecutorWorkers:   2,
+			ExecutorQueueSize: 4,
+		})
+
+		// Close the manager
+		mgr.Close()
+
+		// Create Promise after shutdown should result in immediate rejection
+		p := NewWithMgr(mgr, func(resolve func(string), reject func(error)) {
+			resolve("should not execute")
+		})
+
+		_, err := p.Await()
+		if err == nil {
+			t.Error("Expected error due to manager shutdown, but got none")
+		}
+		if !strings.Contains(err.Error(), "manager is shutdown") {
+			t.Errorf("Expected error to contain 'manager is shutdown', got %v", err)
+		}
+	})
+
+	t.Run("Test SubmitAndWait after shutdown through PromiseMgr", func(t *testing.T) {
+		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
+			ExecutorWorkers:   2,
+			ExecutorQueueSize: 4,
+		})
+
+		// Close the manager
+		mgr.Close()
+
+		// Create Promise after shutdown should result in immediate rejection
+		p := NewWithMgr(mgr, func(resolve func(string), reject func(error)) {
+			resolve("should not execute")
+		})
+
+		_, err := p.Await()
+		if err == nil {
+			t.Error("Expected error due to manager shutdown, but got none")
+		}
+		if !strings.Contains(err.Error(), "manager is shutdown") {
+			t.Errorf("Expected error to contain 'manager is shutdown', got %v", err)
+		}
+	})
+
+	// Test direct taskPool methods using test helpers
+	t.Run("Test direct taskPool methods", func(t *testing.T) {
+		// Test defaultTaskPoolConfig directly
+		config := defaultTaskPoolConfig()
+		if config.Workers <= 0 {
+			t.Errorf("Expected positive workers, got %d", config.Workers)
+		}
+		if config.QueueSize <= 0 {
+			t.Errorf("Expected positive queue size, got %d", config.QueueSize)
+		}
+
+		// Test newTaskPool with custom config
+		pool := newTaskPool(&taskPoolConfig{
+			Workers:   3,
+			QueueSize: 6,
+		})
+		if pool == nil {
+			t.Error("Expected taskPool to be non-nil")
+		}
+		defer pool.Close()
+
+		// Test Workers method
+		workers := pool.Workers()
+		if workers != 3 {
+			t.Errorf("Expected 3 workers, got %d", workers)
+		}
+
+		// Test IsShutdown method
+		if pool.IsShutdown() {
+			t.Error("Expected taskPool to not be shutdown initially")
+		}
+
+		// Test SubmitAndWait method
+		executed := false
+		err := pool.SubmitAndWait(func() {
+			executed = true
+		})
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		if !executed {
+			t.Error("Expected function to be executed")
+		}
+
+		// Test SubmitAndWait when queue is full
+		// Fill the queue
+		for i := 0; i < 8; i++ {
+			pool.Submit(func() {
+				time.Sleep(10 * time.Millisecond)
+			})
+		}
+
+		// This should execute directly since queue is full
+		executed2 := false
+		err = pool.SubmitAndWait(func() {
+			executed2 = true
+		})
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		if !executed2 {
+			t.Error("Expected function to be executed directly")
+		}
+
+		// Test SubmitAndWait after shutdown
+		pool.Close()
+		if !pool.IsShutdown() {
+			t.Error("Expected taskPool to be shutdown after close")
+		}
+
+		err = pool.SubmitAndWait(func() {
+			// This should not execute
+		})
+		if err != ErrManagerStopped {
+			t.Errorf("Expected ErrManagerStopped, got %v", err)
 		}
 	})
 }
