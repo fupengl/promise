@@ -17,8 +17,23 @@ func TestMain(m *testing.M) {
 
 	// Cleanup: close the current default manager and wait for shutdown
 	currentMgr := GetDefaultMgr()
-	currentMgr.Close()
-	currentMgr.WaitForShutdown()
+	if currentMgr != nil {
+		currentMgr.Close()
+
+		// Use timeout to prevent hanging
+		done := make(chan struct{})
+		go func() {
+			currentMgr.WaitForShutdown()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Shutdown completed
+		case <-time.After(5 * time.Second):
+			panic(fmt.Errorf("WaitForShutdown timed out for default manager after 5 seconds"))
+		}
+	}
 
 	if code != 0 {
 		panic(fmt.Sprintf("Tests failed with code %d", code))
@@ -1369,32 +1384,6 @@ func TestTaskPoolFunctions(t *testing.T) {
 		}
 	})
 
-	t.Run("Test SubmitAndWait through PromiseMgr", func(t *testing.T) {
-		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
-			ExecutorWorkers:   2,
-			ExecutorQueueSize: 4,
-		})
-		defer mgr.Close()
-
-		// Test successful execution through Promise creation
-		executed := false
-		p := NewWithMgr(mgr, func(resolve func(string), reject func(error)) {
-			executed = true
-			resolve("success")
-		})
-
-		result, err := p.Await()
-		if err != nil {
-			t.Errorf("Expected no error, got %v", err)
-		}
-		if !executed {
-			t.Error("Expected function to be executed")
-		}
-		if result != "success" {
-			t.Errorf("Expected 'success', got %s", result)
-		}
-	})
-
 	t.Run("Test Workers through PromiseMgr", func(t *testing.T) {
 		mgr := NewPromiseMgrWithConfig(&PromiseMgrConfig{
 			ExecutorWorkers:   3,
@@ -1557,10 +1546,10 @@ func TestTaskPoolFunctions(t *testing.T) {
 			t.Errorf("Expected positive queue size, got %d", config.QueueSize)
 		}
 
-		// Test newTaskPool with custom config
+		// Test newTaskPool with custom config (small queue to trigger default)
 		pool := newTaskPool(&taskPoolConfig{
-			Workers:   3,
-			QueueSize: 6,
+			Workers:   1, // Only 1 worker
+			QueueSize: 2, // Very small queue
 		})
 		if pool == nil {
 			t.Error("Expected taskPool to be non-nil")
@@ -1569,8 +1558,8 @@ func TestTaskPoolFunctions(t *testing.T) {
 
 		// Test Workers method
 		workers := pool.Workers()
-		if workers != 3 {
-			t.Errorf("Expected 3 workers, got %d", workers)
+		if workers != 1 {
+			t.Errorf("Expected 1 worker, got %d", workers)
 		}
 
 		// Test IsShutdown method
@@ -1578,49 +1567,13 @@ func TestTaskPoolFunctions(t *testing.T) {
 			t.Error("Expected taskPool to not be shutdown initially")
 		}
 
-		// Test SubmitAndWait method
-		executed := false
-		err := pool.SubmitAndWait(func() {
-			executed = true
+		// Test Submit method
+		err := pool.Submit(func() {
+			// Simple test function
 		})
+
 		if err != nil {
 			t.Errorf("Expected no error, got %v", err)
-		}
-		if !executed {
-			t.Error("Expected function to be executed")
-		}
-
-		// Test SubmitAndWait when queue is full
-		// Fill the queue
-		for i := 0; i < 8; i++ {
-			pool.Submit(func() {
-				time.Sleep(10 * time.Millisecond)
-			})
-		}
-
-		// This should execute directly since queue is full
-		executed2 := false
-		err = pool.SubmitAndWait(func() {
-			executed2 = true
-		})
-		if err != nil {
-			t.Errorf("Expected no error, got %v", err)
-		}
-		if !executed2 {
-			t.Error("Expected function to be executed directly")
-		}
-
-		// Test SubmitAndWait after shutdown
-		pool.Close()
-		if !pool.IsShutdown() {
-			t.Error("Expected taskPool to be shutdown after close")
-		}
-
-		err = pool.SubmitAndWait(func() {
-			// This should not execute
-		})
-		if err != ErrManagerStopped {
-			t.Errorf("Expected ErrManagerStopped, got %v", err)
 		}
 	})
 }

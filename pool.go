@@ -12,25 +12,10 @@ type taskPoolConfig struct {
 	QueueSize int
 }
 
-var taskObjectPool = sync.Pool{
-	New: func() interface{} {
-		return &task{
-			Done: make(chan struct{}),
-		}
-	},
-}
-
-func getTaskFromPool() *task {
-	t := taskObjectPool.Get().(*task)
-	t.Executor = nil
-	t.Done = make(chan struct{})
-	return t
-}
-
-func putTaskToPool(t *task) {
-	t.Executor = nil
-	t.Done = nil
-	taskObjectPool.Put(t)
+func newTask() *task {
+	return &task{
+		Executor: nil,
+	}
 }
 
 func defaultTaskPoolConfig() *taskPoolConfig {
@@ -43,7 +28,6 @@ func defaultTaskPoolConfig() *taskPoolConfig {
 
 type task struct {
 	Executor func()
-	Done     chan struct{}
 }
 
 type taskPool struct {
@@ -110,16 +94,6 @@ func (p *taskPool) worker() {
 				task.Executor()
 			}()
 
-			if task.Done != nil {
-				select {
-				case <-task.Done:
-					// Channel already closed, do nothing
-				default:
-					close(task.Done)
-				}
-			}
-			putTaskToPool(task)
-
 		case <-p.workerCtx.Done():
 			return
 		}
@@ -131,14 +105,13 @@ func (p *taskPool) Submit(executor func()) error {
 		return ErrManagerStopped
 	}
 
-	task := getTaskFromPool()
+	task := newTask()
 	task.Executor = executor
 
 	select {
 	case p.tasks <- task:
 		return nil
 	default:
-		putTaskToPool(task)
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -147,26 +120,6 @@ func (p *taskPool) Submit(executor func()) error {
 			}()
 			executor()
 		}()
-		return nil
-	}
-}
-
-func (p *taskPool) SubmitAndWait(executor func()) error {
-	if atomic.LoadInt32(&p.shutdown) == 1 {
-		return ErrManagerStopped
-	}
-
-	task := getTaskFromPool()
-	task.Executor = executor
-
-	select {
-	case p.tasks <- task:
-		<-task.Done
-		putTaskToPool(task)
-		return nil
-	default:
-		putTaskToPool(task)
-		executor()
 		return nil
 	}
 }
