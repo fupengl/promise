@@ -44,18 +44,7 @@ func NewPromiseMgrWithConfig(config *PromiseMgrConfig) *PromiseMgr {
 	}
 
 	defaultConfig := DefaultPromiseMgrConfig()
-	if config.ExecutorWorkers <= 0 {
-		config.ExecutorWorkers = defaultConfig.ExecutorWorkers
-	}
-	if config.ExecutorQueueSize <= 0 {
-		config.ExecutorQueueSize = defaultConfig.ExecutorQueueSize
-	}
-	if config.MicrotaskWorkers <= 0 {
-		config.MicrotaskWorkers = defaultConfig.MicrotaskWorkers
-	}
-	if config.MicrotaskQueueSize <= 0 {
-		config.MicrotaskQueueSize = defaultConfig.MicrotaskQueueSize
-	}
+	normalizeConfig(config, defaultConfig)
 
 	return &PromiseMgr{
 		executorPool: newTaskPool(&taskPoolConfig{
@@ -67,6 +56,22 @@ func NewPromiseMgrWithConfig(config *PromiseMgrConfig) *PromiseMgr {
 			QueueSize: config.MicrotaskQueueSize,
 		}),
 		config: config,
+	}
+}
+
+// normalizeConfig normalizes config values using defaults
+func normalizeConfig(config *PromiseMgrConfig, defaultConfig *PromiseMgrConfig) {
+	if config.ExecutorWorkers <= 0 {
+		config.ExecutorWorkers = defaultConfig.ExecutorWorkers
+	}
+	if config.ExecutorQueueSize <= 0 {
+		config.ExecutorQueueSize = defaultConfig.ExecutorQueueSize
+	}
+	if config.MicrotaskWorkers <= 0 {
+		config.MicrotaskWorkers = defaultConfig.MicrotaskWorkers
+	}
+	if config.MicrotaskQueueSize <= 0 {
+		config.MicrotaskQueueSize = defaultConfig.MicrotaskQueueSize
 	}
 }
 
@@ -204,14 +209,6 @@ func ResetDefaultMgrExecutor(workers int, queueSize int) {
 	defer defaultManagerMu.Unlock()
 
 	if defaultManager != nil && !defaultManager.IsShutdown() {
-		defaultConfig := DefaultPromiseMgrConfig()
-		if workers <= 0 {
-			workers = defaultConfig.ExecutorWorkers
-		}
-		if queueSize <= 0 {
-			queueSize = defaultConfig.ExecutorQueueSize
-		}
-
 		defaultManager.SetExecutorConfig(workers, queueSize)
 	}
 }
@@ -222,14 +219,6 @@ func ResetDefaultMgrMicrotask(workers int, queueSize int) {
 	defer defaultManagerMu.Unlock()
 
 	if defaultManager != nil && !defaultManager.IsShutdown() {
-		defaultConfig := DefaultPromiseMgrConfig()
-		if workers <= 0 {
-			workers = defaultConfig.MicrotaskWorkers
-		}
-		if queueSize <= 0 {
-			queueSize = defaultConfig.MicrotaskQueueSize
-		}
-
 		defaultManager.SetMicrotaskConfig(workers, queueSize)
 	}
 }

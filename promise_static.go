@@ -1,7 +1,6 @@
 package promise
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 )
@@ -86,7 +85,10 @@ func AllSettled[T any](promises ...*Promise[T]) *Promise[[]Result[T]] {
 func Race[T any](promises ...*Promise[T]) *Promise[T] {
 	return New(func(resolve func(T), reject func(error)) {
 		if len(promises) == 0 {
-			reject(errors.New("no promises provided"))
+			reject(&PromiseError{
+				Message: "no promises provided",
+				Type:    RejectionError,
+			})
 			return
 		}
 
@@ -126,7 +128,10 @@ func Race[T any](promises ...*Promise[T]) *Promise[T] {
 func Any[T any](promises ...*Promise[T]) *Promise[T] {
 	return New(func(resolve func(T), reject func(error)) {
 		if len(promises) == 0 {
-			reject(errors.New("no promises provided"))
+			reject(&PromiseError{
+				Message: "no promises provided",
+				Type:    RejectionError,
+			})
 			return
 		}
 
@@ -157,7 +162,10 @@ func Any[T any](promises ...*Promise[T]) *Promise[T] {
 
 				// If all Promises failed and no success yet
 				if newCompleted == int32(len(promises)) && atomic.LoadInt32(&hasSuccess) == 0 {
-					reject(errors.New("all promises rejected"))
+					reject(&PromiseError{
+						Message: "all promises failed",
+						Type:    RejectionError,
+					})
 				}
 			}(i, p)
 		}
@@ -201,32 +209,21 @@ func Reduce[T any, R any](items []T, fn func(R, T) *Promise[R], initial R) *Prom
 // or rejects with any error/panic that occurs during execution
 // This is similar to Node.js's Promise.try()
 func Try[T any](fn func() T) *Promise[T] {
-	return New(func(resolve func(T), reject func(error)) {
-		result := fn()
-		resolve(result)
-	})
+	return TryWithMgr(GetDefaultMgr(), fn)
 }
 
 // TryWithMgr executes a function using the specified manager and returns a Promise
 // that resolves with the result or rejects with any error/panic that occurs during execution
 func TryWithMgr[T any](manager *PromiseMgr, fn func() T) *Promise[T] {
 	return NewWithMgr(manager, func(resolve func(T), reject func(error)) {
-		result := fn()
-		resolve(result)
+		resolve(fn())
 	})
 }
 
 // TryWithError executes a function that returns (T, error) and returns a Promise
 // This is useful for Go functions that follow the standard (value, error) return pattern
 func TryWithError[T any](fn func() (T, error)) *Promise[T] {
-	return New(func(resolve func(T), reject func(error)) {
-		result, err := fn()
-		if err != nil {
-			reject(err)
-		} else {
-			resolve(result)
-		}
-	})
+	return TryWithErrorAndMgr(GetDefaultMgr(), fn)
 }
 
 // TryWithErrorAndMgr executes a function that returns (T, error) using the specified manager

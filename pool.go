@@ -12,12 +12,6 @@ type taskPoolConfig struct {
 	QueueSize int
 }
 
-func newTask() *task {
-	return &task{
-		Executor: nil,
-	}
-}
-
 func defaultTaskPoolConfig() *taskPoolConfig {
 	workers := runtime.NumCPU() * 2
 	return &taskPoolConfig{
@@ -85,6 +79,7 @@ func (p *taskPool) worker() {
 				continue
 			}
 
+			// Execute task with panic recovery
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -105,22 +100,11 @@ func (p *taskPool) Submit(executor func()) error {
 		return ErrManagerStopped
 	}
 
-	task := newTask()
-	task.Executor = executor
-
 	select {
-	case p.tasks <- task:
+	case p.tasks <- &task{Executor: executor}:
 		return nil
-	default:
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// Handle panic
-				}
-			}()
-			executor()
-		}()
-		return nil
+	case <-p.workerCtx.Done():
+		return ErrManagerStopped
 	}
 }
 

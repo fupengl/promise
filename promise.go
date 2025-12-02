@@ -2,7 +2,6 @@ package promise
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -28,7 +27,7 @@ func WithResolversWithMgr[T any](manager *PromiseMgr) (*Promise[T], func(T), fun
 	if manager.IsShutdown() {
 		p.reject(&PromiseError{
 			Message: "Promise creation failed: manager is shutdown",
-			Cause:   errors.New("manager is shutdown"),
+			Cause:   ErrManagerStopped,
 			Type:    RejectionError,
 		})
 		return p, p.resolve, p.reject
@@ -49,7 +48,7 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 	if manager.IsShutdown() {
 		p.reject(&PromiseError{
 			Message: "Promise creation failed: manager is shutdown",
-			Cause:   errors.New("manager is shutdown"),
+			Cause:   ErrManagerStopped,
 			Type:    RejectionError,
 		})
 		return p
@@ -58,18 +57,7 @@ func NewWithMgr[T any](manager *PromiseMgr, executor func(resolve func(T), rejec
 	if err := manager.scheduleExecutor(func() {
 		defer func() {
 			if r := recover(); r != nil {
-				var panicErr error
-				if err, ok := r.(error); ok {
-					panicErr = wrapErrorIfNeeded(err, "panic in executor", PanicError)
-				} else {
-					panicErr = &PromiseError{
-						Message: fmt.Sprintf("panic in executor: %v", r),
-						Cause:   nil,
-						Type:    PanicError,
-						Value:   r,
-					}
-				}
-				p.reject(panicErr)
+				p.reject(createPanicError(r, "panic in executor"))
 			}
 		}()
 
@@ -93,26 +81,15 @@ func (p *Promise[T]) resolve(value T) {
 	p.setValue(value)
 
 	p.mu.Lock()
-	select {
-	case <-p.done:
-		p.mu.Unlock()
-		return
-	default:
-		close(p.done)
-	}
-
+	close(p.done)
 	handlers := p.handlers
 	p.handlers = nil
 	p.mu.Unlock()
 
 	for _, h := range handlers {
 		if h.onFulfilled != nil {
-			handler := h.onFulfilled
-			next := h.next
-			val := value
-
 			p.manager.scheduleMicrotask(func() {
-				safeCallback(handler, val, next)
+				safeCallback(h.onFulfilled, value, h.next)
 			})
 		}
 	}
@@ -127,33 +104,19 @@ func (p *Promise[T]) reject(err error) {
 	p.setError(finalErr)
 
 	p.mu.Lock()
-	select {
-	case <-p.done:
-		p.mu.Unlock()
-		return
-	default:
-		close(p.done)
-	}
-
+	close(p.done)
 	handlers := p.handlers
 	p.handlers = nil
 	p.mu.Unlock()
 
 	for _, h := range handlers {
 		if h.onRejected != nil {
-			handler := h.onRejected
-			next := h.next
-			errVal := finalErr
-
 			p.manager.scheduleMicrotask(func() {
-				safeErrorCallback(handler, errVal, next)
+				safeErrorCallback(h.onRejected, finalErr, h.next)
 			})
 		} else if h.next != nil {
-			next := h.next
-			errVal := finalErr
-
 			p.manager.scheduleMicrotask(func() {
-				next.reject(errVal)
+				h.next.reject(finalErr)
 			})
 		}
 	}
@@ -176,26 +139,24 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 	state := p.getState()
 
 	if state == Fulfilled {
+		value, _ := p.getValue()
 		if onFulfilled != nil {
-			value, _ := p.getValue()
 			p.manager.scheduleMicrotask(func() {
 				safeCallback(onFulfilled, value, next)
 			})
 		} else {
-			value, _ := p.getValue()
 			next.resolve(value)
 		}
 		return next
 	}
 
 	if state == Rejected {
+		err, _ := p.getError()
 		if onRejected != nil {
-			err, _ := p.getError()
 			p.manager.scheduleMicrotask(func() {
 				safeErrorCallback(onRejected, err, next)
 			})
 		} else {
-			err, _ := p.getError()
 			next.reject(err)
 		}
 		return next
@@ -238,89 +199,50 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 		next: nil,
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	state := p.getState()
 
-	if p.getState() == Fulfilled {
-		handler := h.onFulfilled
+	if state == Fulfilled {
 		val, _ := p.getValue()
-
 		p.manager.scheduleMicrotask(func() {
-			handler(val)
+			h.onFulfilled(val)
 		})
-	} else if p.getState() == Rejected {
-		handler := h.onRejected
+	} else if state == Rejected {
 		errVal, _ := p.getError()
-
 		p.manager.scheduleMicrotask(func() {
-			handler(errVal)
+			h.onRejected(errVal)
 		})
 	} else {
+		p.mu.Lock()
 		if p.handlers == nil {
 			p.handlers = make([]*handler[T], 0, 2)
 		}
 		p.handlers = append(p.handlers, h)
+		p.mu.Unlock()
 	}
 
 	return next
 }
 
 func (p *Promise[T]) Await() (T, error) {
-	state := p.getState()
-	if state == Fulfilled {
-		if value, ok := p.getValue(); ok {
-			return value, nil
-		}
-	}
-	if state == Rejected {
-		if err, ok := p.getError(); ok {
-			var zero T
-			return zero, err
-		}
-	}
-
-	p.mu.Lock()
-	done := p.done
-	p.mu.Unlock()
-
-	<-done
-
-	state = p.getState()
-	if state == Fulfilled {
-		if value, ok := p.getValue(); ok {
-			return value, nil
-		}
-		var zero T
-		return zero, &PromiseError{
-			Message: "Promise fulfilled but value not available",
-			Type:    RejectionError,
-		}
-	}
-
-	var zero T
-	if err, ok := p.getError(); ok {
-		return zero, err
-	}
-	return zero, &PromiseError{
-		Message: "Promise rejected but error not available",
-		Type:    RejectionError,
-	}
+	return p.AwaitWithContext(context.Background())
 }
 
 func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
-	state := p.getState()
-	if state == Fulfilled {
-		if value, ok := p.getValue(); ok {
-			return value, nil
-		}
-	}
-	if state == Rejected {
-		if err, ok := p.getError(); ok {
-			var zero T
-			return zero, err
+	// Fast path: check if already resolved
+	if state := p.getState(); state != Pending {
+		if state == Fulfilled {
+			if value, ok := p.getValue(); ok {
+				return value, nil
+			}
+		} else {
+			if err, ok := p.getError(); ok {
+				var zero T
+				return zero, err
+			}
 		}
 	}
 
+	// Wait for completion
 	p.mu.Lock()
 	done := p.done
 	p.mu.Unlock()
@@ -332,7 +254,8 @@ func (p *Promise[T]) AwaitWithContext(ctx context.Context) (T, error) {
 	case <-done:
 	}
 
-	state = p.getState()
+	// Get final result
+	state := p.getState()
 	if state == Fulfilled {
 		if value, ok := p.getValue(); ok {
 			return value, nil
@@ -370,6 +293,19 @@ func (p *Promise[T]) IsRejected() bool {
 	return p.State() == Rejected
 }
 
+// createPanicError creates a PromiseError from a panic value
+func createPanicError(r interface{}, message string) error {
+	if err, ok := r.(error); ok {
+		return wrapErrorIfNeeded(err, message, PanicError)
+	}
+	return &PromiseError{
+		Message: fmt.Sprintf("%s: %v", message, r),
+		Cause:   nil,
+		Type:    PanicError,
+		Value:   r,
+	}
+}
+
 func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 	if next == nil {
 		callback(value)
@@ -378,22 +314,7 @@ func safeCallback[T any](callback func(T) any, value T, next *Promise[any]) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			var err error
-			if e, ok := r.(error); ok {
-				err = &PromiseError{
-					Message: "panic in fulfilled callback",
-					Cause:   e,
-					Type:    PanicError,
-				}
-			} else {
-				err = &PromiseError{
-					Message: fmt.Sprintf("panic in fulfilled callback: %v", r),
-					Cause:   nil,
-					Type:    PanicError,
-					Value:   r,
-				}
-			}
-			next.reject(err)
+			next.reject(createPanicError(r, "panic in fulfilled callback"))
 		}
 	}()
 
@@ -409,22 +330,9 @@ func safeErrorCallback(callback func(error) any, err error, next *Promise[any]) 
 
 	defer func() {
 		if r := recover(); r != nil {
-			var panicErr error
-			if e, ok := r.(error); ok {
-				panicErr = &PromiseError{
-					Message:       "panic in error callback",
-					Cause:         e,
-					Type:          PanicError,
-					OriginalError: err,
-				}
-			} else {
-				panicErr = &PromiseError{
-					Message:       fmt.Sprintf("panic in error callback: %v", r),
-					Cause:         nil,
-					Type:          PanicError,
-					Value:         r,
-					OriginalError: err,
-				}
+			panicErr := createPanicError(r, "panic in error callback")
+			if promiseErr, ok := panicErr.(*PromiseError); ok {
+				promiseErr.OriginalError = err
 			}
 			next.reject(panicErr)
 		}
@@ -442,22 +350,9 @@ func safeFinallyCallback[T any](callback func(), next *Promise[T], value T, err 
 
 	defer func() {
 		if r := recover(); r != nil {
-			var panicErr error
-			if e, ok := r.(error); ok {
-				panicErr = &PromiseError{
-					Message:       "panic in finally callback",
-					Cause:         e,
-					Type:          PanicError,
-					OriginalError: err,
-				}
-			} else {
-				panicErr = &PromiseError{
-					Message:       fmt.Sprintf("panic in finally callback: %v", r),
-					Cause:         nil,
-					Type:          PanicError,
-					Value:         r,
-					OriginalError: err,
-				}
+			panicErr := createPanicError(r, "panic in finally callback")
+			if promiseErr, ok := panicErr.(*PromiseError); ok {
+				promiseErr.OriginalError = err
 			}
 			next.reject(panicErr)
 			return

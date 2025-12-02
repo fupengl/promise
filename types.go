@@ -123,8 +123,8 @@ func (p *Promise[T]) setState(state State) bool {
 
 // Helper function: safely get value
 func (p *Promise[T]) getValue() (T, bool) {
-	if value, ok := p.value.Load().(T); ok {
-		return value, true
+	if ptr, ok := p.value.Load().(*T); ok && ptr != nil {
+		return *ptr, true
 	}
 	var zero T
 	return zero, false
@@ -132,7 +132,11 @@ func (p *Promise[T]) getValue() (T, bool) {
 
 // Helper function: safely set value
 func (p *Promise[T]) setValue(value T) {
-	p.value.Store(value)
+	// Use pointer wrapper to safely store nil values in atomic.Value
+	// Allocate a new value on heap to avoid issues with local variable addresses
+	ptr := new(T)
+	*ptr = value
+	p.value.Store(ptr)
 }
 
 // Helper function: safely get error
