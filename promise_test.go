@@ -491,7 +491,7 @@ func TestRejectFunction(t *testing.T) {
 func TestMicrotaskConfig(t *testing.T) {
 	// Test default config
 	defaultConfig := DefaultPromiseMgrConfig()
-	expectedQueueSize := runtime.NumCPU() * 100
+	expectedQueueSize := 2000 + runtime.NumCPU()*200
 	if defaultConfig.MicrotaskQueueSize != expectedQueueSize {
 		t.Errorf("Expected default MicrotaskQueueSize %d, got %d", expectedQueueSize, defaultConfig.MicrotaskQueueSize)
 	}

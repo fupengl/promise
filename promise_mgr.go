@@ -18,11 +18,13 @@ func DefaultPromiseMgrConfig() *PromiseMgrConfig {
 	executorWorkers := cpuCount * 2
 	microtaskWorkers := cpuCount
 
+	microtaskQueueSize := 2000 + microtaskWorkers*200
+
 	return &PromiseMgrConfig{
 		ExecutorWorkers:    executorWorkers,
 		ExecutorQueueSize:  executorWorkers * 4,
 		MicrotaskWorkers:   microtaskWorkers,
-		MicrotaskQueueSize: microtaskWorkers * 100,
+		MicrotaskQueueSize: microtaskQueueSize,
 	}
 }
 
