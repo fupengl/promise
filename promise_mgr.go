@@ -1,6 +1,7 @@
 package promise
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -29,11 +30,15 @@ func DefaultPromiseMgrConfig() *PromiseMgrConfig {
 }
 
 type PromiseMgr struct {
-	executorPool  *taskPool
-	microtaskPool *taskPool
-	mu            sync.RWMutex
-	shutdown      int32
-	config        *PromiseMgrConfig
+	executorPool    *taskPool
+	microtaskPool   *taskPool
+	mu              sync.RWMutex
+	shutdown        int32
+	config          *PromiseMgrConfig
+	microtaskSched  chan func()
+	schedulerWg     sync.WaitGroup
+	schedulerCtx    context.Context
+	schedulerCancel context.CancelFunc
 }
 
 func NewPromiseMgr() *PromiseMgr {
@@ -48,7 +53,8 @@ func NewPromiseMgrWithConfig(config *PromiseMgrConfig) *PromiseMgr {
 	defaultConfig := DefaultPromiseMgrConfig()
 	normalizeConfig(config, defaultConfig)
 
-	return &PromiseMgr{
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr := &PromiseMgr{
 		executorPool: newTaskPool(&taskPoolConfig{
 			Workers:   config.ExecutorWorkers,
 			QueueSize: config.ExecutorQueueSize,
@@ -57,8 +63,15 @@ func NewPromiseMgrWithConfig(config *PromiseMgrConfig) *PromiseMgr {
 			Workers:   config.MicrotaskWorkers,
 			QueueSize: config.MicrotaskQueueSize,
 		}),
-		config: config,
+		config:          config,
+		microtaskSched:  make(chan func(), 10000),
+		schedulerCtx:    ctx,
+		schedulerCancel: cancel,
 	}
+
+	mgr.startMicrotaskScheduler()
+
+	return mgr
 }
 
 // normalizeConfig normalizes config values using defaults
@@ -86,13 +99,45 @@ func (m *PromiseMgr) scheduleExecutor(executor func()) error {
 	return m.executorPool.Submit(executor)
 }
 
-// scheduleMicrotask schedules a microtask using this manager's queue
+func (m *PromiseMgr) startMicrotaskScheduler() {
+	m.schedulerWg.Add(1)
+	go func() {
+		defer m.schedulerWg.Done()
+		for {
+			select {
+			case fn := <-m.microtaskSched:
+				if fn == nil {
+					return
+				}
+				_ = m.microtaskPool.Submit(fn)
+			case <-m.schedulerCtx.Done():
+				return
+			}
+		}
+	}()
+}
+
 func (m *PromiseMgr) scheduleMicrotask(fn func()) error {
 	if atomic.LoadInt32(&m.shutdown) == 1 {
 		return ErrManagerStopped
 	}
 
-	return m.microtaskPool.Submit(fn)
+	select {
+	case m.microtaskSched <- fn:
+		return nil
+	case <-m.schedulerCtx.Done():
+		return ErrManagerStopped
+	default:
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Prevent goroutine crash
+				}
+			}()
+			fn()
+		}()
+		return nil
+	}
 }
 
 // SetMicrotaskConfig updates microtask configuration
@@ -166,6 +211,10 @@ func (m *PromiseMgr) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.schedulerCancel()
+	close(m.microtaskSched)
+	m.schedulerWg.Wait()
+
 	m.executorPool.Close()
 	m.microtaskPool.Close()
 }
@@ -186,6 +235,7 @@ func (m *PromiseMgr) IsShutdown() bool {
 
 // WaitForShutdown waits for shutdown completion
 func (m *PromiseMgr) WaitForShutdown() {
+	m.schedulerWg.Wait()
 	m.executorPool.WaitForShutdown()
 	m.microtaskPool.WaitForShutdown()
 }
