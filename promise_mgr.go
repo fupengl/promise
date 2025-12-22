@@ -1,7 +1,6 @@
 package promise
 
 import (
-	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -19,7 +18,7 @@ func DefaultPromiseMgrConfig() *PromiseMgrConfig {
 	executorWorkers := cpuCount * 2
 	microtaskWorkers := cpuCount
 
-	microtaskQueueSize := 2000 + microtaskWorkers*200
+	microtaskQueueSize := 5000 + microtaskWorkers*500
 
 	return &PromiseMgrConfig{
 		ExecutorWorkers:    executorWorkers,
@@ -30,15 +29,11 @@ func DefaultPromiseMgrConfig() *PromiseMgrConfig {
 }
 
 type PromiseMgr struct {
-	executorPool    *taskPool
-	microtaskPool   *taskPool
-	mu              sync.RWMutex
-	shutdown        int32
-	config          *PromiseMgrConfig
-	microtaskSched  chan func()
-	schedulerWg     sync.WaitGroup
-	schedulerCtx    context.Context
-	schedulerCancel context.CancelFunc
+	executorPool  *taskPool
+	microtaskPool *taskPool
+	mu            sync.RWMutex
+	shutdown      int32
+	config        *PromiseMgrConfig
 }
 
 func NewPromiseMgr() *PromiseMgr {
@@ -53,7 +48,6 @@ func NewPromiseMgrWithConfig(config *PromiseMgrConfig) *PromiseMgr {
 	defaultConfig := DefaultPromiseMgrConfig()
 	normalizeConfig(config, defaultConfig)
 
-	ctx, cancel := context.WithCancel(context.Background())
 	mgr := &PromiseMgr{
 		executorPool: newTaskPool(&taskPoolConfig{
 			Workers:   config.ExecutorWorkers,
@@ -63,13 +57,8 @@ func NewPromiseMgrWithConfig(config *PromiseMgrConfig) *PromiseMgr {
 			Workers:   config.MicrotaskWorkers,
 			QueueSize: config.MicrotaskQueueSize,
 		}),
-		config:          config,
-		microtaskSched:  make(chan func(), 10000),
-		schedulerCtx:    ctx,
-		schedulerCancel: cancel,
+		config: config,
 	}
-
-	mgr.startMicrotaskScheduler()
 
 	return mgr
 }
@@ -99,45 +88,12 @@ func (m *PromiseMgr) scheduleExecutor(executor func()) error {
 	return m.executorPool.Submit(executor)
 }
 
-func (m *PromiseMgr) startMicrotaskScheduler() {
-	m.schedulerWg.Add(1)
-	go func() {
-		defer m.schedulerWg.Done()
-		for {
-			select {
-			case fn := <-m.microtaskSched:
-				if fn == nil {
-					return
-				}
-				_ = m.microtaskPool.Submit(fn)
-			case <-m.schedulerCtx.Done():
-				return
-			}
-		}
-	}()
-}
-
 func (m *PromiseMgr) scheduleMicrotask(fn func()) error {
 	if atomic.LoadInt32(&m.shutdown) == 1 {
 		return ErrManagerStopped
 	}
 
-	select {
-	case m.microtaskSched <- fn:
-		return nil
-	case <-m.schedulerCtx.Done():
-		return ErrManagerStopped
-	default:
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// Prevent goroutine crash
-				}
-			}()
-			fn()
-		}()
-		return nil
-	}
+	return m.microtaskPool.Submit(fn)
 }
 
 // SetMicrotaskConfig updates microtask configuration
@@ -211,10 +167,6 @@ func (m *PromiseMgr) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.schedulerCancel()
-	close(m.microtaskSched)
-	m.schedulerWg.Wait()
-
 	m.executorPool.Close()
 	m.microtaskPool.Close()
 }
@@ -235,7 +187,6 @@ func (m *PromiseMgr) IsShutdown() bool {
 
 // WaitForShutdown waits for shutdown completion
 func (m *PromiseMgr) WaitForShutdown() {
-	m.schedulerWg.Wait()
 	m.executorPool.WaitForShutdown()
 	m.microtaskPool.WaitForShutdown()
 }

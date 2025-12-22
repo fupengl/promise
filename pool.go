@@ -20,12 +20,8 @@ func defaultTaskPoolConfig() *taskPoolConfig {
 	}
 }
 
-type task struct {
-	Executor func()
-}
-
 type taskPool struct {
-	tasks        chan *task
+	tasks        chan func()
 	workers      int32
 	mu           sync.RWMutex
 	shutdown     int32
@@ -49,7 +45,7 @@ func newTaskPool(config *taskPoolConfig) *taskPool {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pool := &taskPool{
-		tasks:        make(chan *task, config.QueueSize),
+		tasks:        make(chan func(), config.QueueSize),
 		workers:      int32(config.Workers),
 		workerCtx:    ctx,
 		workerCancel: cancel,
@@ -71,11 +67,11 @@ func (p *taskPool) worker() {
 
 	for {
 		select {
-		case task, ok := <-p.tasks:
+		case fn, ok := <-p.tasks:
 			if !ok {
 				return
 			}
-			if task == nil {
+			if fn == nil {
 				continue
 			}
 
@@ -86,7 +82,7 @@ func (p *taskPool) worker() {
 						// Prevent worker crash
 					}
 				}()
-				task.Executor()
+				fn()
 			}()
 
 		case <-p.workerCtx.Done():
@@ -101,7 +97,7 @@ func (p *taskPool) Submit(executor func()) error {
 	}
 
 	select {
-	case p.tasks <- &task{Executor: executor}:
+	case p.tasks <- executor:
 		return nil
 	case <-p.workerCtx.Done():
 		return ErrManagerStopped
