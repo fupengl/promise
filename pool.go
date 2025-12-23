@@ -98,6 +98,9 @@ func (p *taskPool) Submit(executor func()) error {
 
 	select {
 	case p.tasks <- executor:
+		if atomic.LoadInt32(&p.shutdown) == 1 {
+			return ErrManagerStopped
+		}
 		return nil
 	case <-p.workerCtx.Done():
 		return ErrManagerStopped
@@ -117,11 +120,12 @@ func (p *taskPool) Close() {
 		return
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.workerCancel()
+
+	p.mu.Lock()
 	close(p.tasks)
+	p.mu.Unlock()
+
 	p.workerWg.Wait()
 }
 
