@@ -88,9 +88,15 @@ func (p *Promise[T]) resolve(value T) {
 
 	for _, h := range handlers {
 		if h.onFulfilled != nil {
-			p.manager.scheduleMicrotask(func() {
+			if err := p.manager.scheduleMicrotask(func() {
 				safeCallback(h.onFulfilled, value, h.next)
-			})
+			}); err != nil && h.next != nil {
+				h.next.reject(&PromiseError{
+					Message: "failed to schedule microtask",
+					Cause:   err,
+					Type:    RejectionError,
+				})
+			}
 		}
 	}
 }
@@ -111,13 +117,25 @@ func (p *Promise[T]) reject(err error) {
 
 	for _, h := range handlers {
 		if h.onRejected != nil {
-			p.manager.scheduleMicrotask(func() {
+			if err := p.manager.scheduleMicrotask(func() {
 				safeErrorCallback(h.onRejected, finalErr, h.next)
-			})
+			}); err != nil && h.next != nil {
+				h.next.reject(&PromiseError{
+					Message: "failed to schedule microtask",
+					Cause:   err,
+					Type:    RejectionError,
+				})
+			}
 		} else if h.next != nil {
-			p.manager.scheduleMicrotask(func() {
+			if err := p.manager.scheduleMicrotask(func() {
 				h.next.reject(finalErr)
-			})
+			}); err != nil {
+				h.next.reject(&PromiseError{
+					Message: "failed to schedule microtask",
+					Cause:   err,
+					Type:    RejectionError,
+				})
+			}
 		}
 	}
 }
@@ -141,9 +159,15 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 	if state == Fulfilled {
 		value, _ := p.getValue()
 		if onFulfilled != nil {
-			p.manager.scheduleMicrotask(func() {
+			if err := p.manager.scheduleMicrotask(func() {
 				safeCallback(onFulfilled, value, next)
-			})
+			}); err != nil {
+				next.reject(&PromiseError{
+					Message: "failed to schedule microtask",
+					Cause:   err,
+					Type:    RejectionError,
+				})
+			}
 		} else {
 			next.resolve(value)
 		}
@@ -153,9 +177,15 @@ func (p *Promise[T]) Then(onFulfilled func(T) any, onRejected func(error) any) *
 	if state == Rejected {
 		err, _ := p.getError()
 		if onRejected != nil {
-			p.manager.scheduleMicrotask(func() {
+			if err := p.manager.scheduleMicrotask(func() {
 				safeErrorCallback(onRejected, err, next)
-			})
+			}); err != nil {
+				next.reject(&PromiseError{
+					Message: "failed to schedule microtask",
+					Cause:   err,
+					Type:    RejectionError,
+				})
+			}
 		} else {
 			next.reject(err)
 		}
@@ -203,14 +233,26 @@ func (p *Promise[T]) Finally(onFinally func()) *Promise[T] {
 
 	if state == Fulfilled {
 		val, _ := p.getValue()
-		p.manager.scheduleMicrotask(func() {
+		if err := p.manager.scheduleMicrotask(func() {
 			h.onFulfilled(val)
-		})
+		}); err != nil {
+			next.reject(&PromiseError{
+				Message: "failed to schedule microtask",
+				Cause:   err,
+				Type:    RejectionError,
+			})
+		}
 	} else if state == Rejected {
 		errVal, _ := p.getError()
-		p.manager.scheduleMicrotask(func() {
+		if err := p.manager.scheduleMicrotask(func() {
 			h.onRejected(errVal)
-		})
+		}); err != nil {
+			next.reject(&PromiseError{
+				Message: "failed to schedule microtask",
+				Cause:   err,
+				Type:    RejectionError,
+			})
+		}
 	} else {
 		p.mu.Lock()
 		if p.handlers == nil {
